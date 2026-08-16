@@ -16,19 +16,34 @@ logger = logging.getLogger(__name__)
 class AudioPlayer:
     """Handles audio playback for TTS and sound effects on Raspberry Pi and development machines."""
 
-    @staticmethod
-    def play_wav_bytes(audio_bytes: bytes):
+    _is_playing: bool = False
+    _playback_lock = threading.Lock()
+
+    @classmethod
+    def is_playing(cls) -> bool:
+        """Check if audio is currently being played back."""
+        with cls._playback_lock:
+            return cls._is_playing
+
+    @classmethod
+    def _set_playing(cls, playing: bool):
+        with cls._playback_lock:
+            cls._is_playing = playing
+
+    @classmethod
+    def play_wav_bytes(cls, audio_bytes: bytes):
         """Play WAV bytes using available system audio backend (aplay, afplay, ffplay)."""
         if not audio_bytes:
             return
 
+        cls._set_playing(True)
         tmp_path = None
         try:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 f.write(audio_bytes)
                 tmp_path = f.name
 
-            AudioPlayer.play_file(tmp_path)
+            cls.play_file(tmp_path)
         except Exception as e:
             logger.error(f"Failed to play wav bytes: {e}")
         finally:
@@ -37,9 +52,10 @@ class AudioPlayer:
                     os.remove(tmp_path)
                 except Exception:
                     pass
+            cls._set_playing(False)
 
-    @staticmethod
-    def play_pcm_bytes(pcm_bytes: bytes, sample_rate: int = 24000, channels: int = 1, sample_width: int = 2):
+    @classmethod
+    def play_pcm_bytes(cls, pcm_bytes: bytes, sample_rate: int = 24000, channels: int = 1, sample_width: int = 2):
         """Play raw PCM16 bytes by wrapping in a temporary WAV container."""
         if not pcm_bytes:
             return
@@ -50,12 +66,12 @@ class AudioPlayer:
                 wf.setsampwidth(sample_width)
                 wf.setframerate(sample_rate)
                 wf.writeframes(pcm_bytes)
-            AudioPlayer.play_wav_bytes(wav_buffer.getvalue())
+            cls.play_wav_bytes(wav_buffer.getvalue())
         except Exception as e:
             logger.error(f"Failed to play PCM bytes: {e}")
 
-    @staticmethod
-    def play_file(file_path: str):
+    @classmethod
+    def play_file(cls, file_path: str):
         """Play audio file using aplay (Linux/RPi) or afplay (macOS)."""
         if not os.path.exists(file_path):
             return
@@ -189,11 +205,18 @@ class MicrophoneWorker:
         import speech_recognition as sr
         while self._running:
             try:
+                if AudioPlayer.is_playing():
+                    time.sleep(0.5)
+                    continue
+
                 with self._microphone as source:
                     if self.dynamic_energy_threshold:
                         self._recognizer.adjust_for_ambient_noise(source, duration=0.5)
 
                     audio_data = self._recognizer.listen(source, timeout=3.0, phrase_time_limit=10.0)
+
+                    if AudioPlayer.is_playing():
+                        continue
 
                     if audio_data and self._running:
                         wav_bytes = audio_data.get_wav_data()
@@ -235,6 +258,12 @@ class MicrophoneWorker:
         tmp_wav = os.path.join(tempfile.gettempdir(), "pidog_mic_chunk.wav")
         while self._running:
             try:
+                # If dog is currently speaking/playing audio, skip recording to prevent self-hearing acoustic feedback loop
+                if AudioPlayer.is_playing():
+                    logger.debug("Audio playback in progress, suppressing mic capture...")
+                    time.sleep(0.5)
+                    continue
+
                 # Use configured device (e.g. plughw:1,0 or default)
                 cmd = [
                     "arecord",
@@ -247,6 +276,12 @@ class MicrophoneWorker:
                     tmp_wav
                 ]
                 proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+
+                # Re-check if audio started playing during recording
+                if AudioPlayer.is_playing():
+                    logger.debug("Playback occurred during recording chunk, discarding chunk.")
+                    continue
+
                 if proc.returncode == 0 and os.path.exists(tmp_wav) and self._running:
                     file_size = os.path.getsize(tmp_wav)
                     if file_size > 4000:
@@ -256,7 +291,7 @@ class MicrophoneWorker:
                         # Check RMS energy level (VAD) to ignore complete silence / low background noise
                         rms = self._compute_rms_energy(wav_bytes)
                         logger.info(f"[Mic Audio Captured] size={len(wav_bytes)} bytes, energy={rms:.1f}")
-                        # Threshold for audible speech vs silence (50+ captures normal/quiet speech, rejects absolute silence)
+                        # Threshold for audible speech vs silence
                         if rms >= 50:
                             logger.info(f"Publishing voice utterance to ASR (energy={rms:.1f} >= 50)...")
                             self.bus.publish("voice.input.audio", {"audio": wav_bytes})
