@@ -102,12 +102,14 @@ class MicrophoneWorker:
     def __init__(
         self,
         bus: EventBus,
+        device: Optional[str] = None,
         sample_rate: int = 16000,
         energy_threshold: int = 2000,
         pause_threshold: float = 0.8,
         dynamic_energy_threshold: bool = True,
     ):
         self.bus = bus
+        self.device = device or os.getenv("AUDIO_INPUT_DEVICE", "plughw:1,0")
         self.sample_rate = sample_rate
         self.energy_threshold = energy_threshold
         self.pause_threshold = pause_threshold
@@ -225,11 +227,11 @@ class MicrophoneWorker:
         tmp_wav = os.path.join(tempfile.gettempdir(), "pidog_mic_chunk.wav")
         while self._running:
             try:
-                # Record in 3-second chunks
+                # Use configured device (e.g. plughw:1,0 or default)
                 cmd = [
                     "arecord",
                     "-q",
-                    "-D", "default",
+                    "-D", str(self.device),
                     "-f", "S16_LE",
                     "-r", str(self.sample_rate),
                     "-c", "1",
@@ -245,12 +247,12 @@ class MicrophoneWorker:
 
                         # Check RMS energy level (VAD) to ignore complete silence / low background noise
                         rms = self._compute_rms_energy(wav_bytes)
-                        # Threshold for audible speech vs silence
-                        if rms >= 300:
+                        # Threshold for audible speech vs silence (relaxed to 150 for Pi Zero mic gain)
+                        if rms >= 150:
                             logger.info(f"Captured voice utterance via arecord ({len(wav_bytes)} bytes, energy={rms:.1f}), publishing to ASR...")
                             self.bus.publish("voice.input.audio", {"audio": wav_bytes})
                         else:
-                            logger.debug(f"Ignored silent audio chunk ({len(wav_bytes)} bytes, energy={rms:.1f} < 300)")
+                            logger.debug(f"Ignored silent audio chunk ({len(wav_bytes)} bytes, energy={rms:.1f} < 150)")
             except Exception as e:
                 logger.debug(f"Arecord capture exception: {e}")
                 time.sleep(0.5)

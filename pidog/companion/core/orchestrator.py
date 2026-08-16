@@ -153,7 +153,10 @@ class CompanionOrchestrator:
             try:
                 text = self.asr.transcribe(audio_bytes)
                 if text and text.strip():
+                    logger.info(f"ASR transcription result: '{text.strip()}'")
                     self.enqueue_dialogue(text.strip())
+                else:
+                    logger.debug("ASR returned empty transcription.")
             except Exception as e:
                 logger.error(f"ASR transcription error: {e}")
 
