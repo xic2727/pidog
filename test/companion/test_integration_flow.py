@@ -141,8 +141,8 @@ class TestCompanionIntegrationFlow(unittest.TestCase):
         call_kwargs = self.mock_vlm.generate.call_args[1]
         self.assertEqual(call_kwargs["image_data"], b"fake_jpeg_frame")
 
-        # Verify hardware action
-        self.mock_dog.do_action.assert_called_with("tilt_head", speed=50)
+        # Verify hardware action (tilt_head alias resolved to tilting_head)
+        self.mock_dog.do_action.assert_called_with("tilting_head", speed=50)
 
     def test_lifecycle_and_graceful_shutdown(self):
         """Test complete system start and safe shutdown without hanging or leaking threads."""

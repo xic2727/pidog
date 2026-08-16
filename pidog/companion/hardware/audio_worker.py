@@ -196,12 +196,36 @@ class MicrophoneWorker:
                 logger.debug(f"SR capture cycle exception: {e}")
                 time.sleep(0.5)
 
+    @staticmethod
+    def _compute_rms_energy(audio_bytes: bytes) -> float:
+        """Calculate RMS (root mean square) volume energy of 16-bit PCM/WAV data."""
+        if not audio_bytes or len(audio_bytes) < 44:
+            return 0.0
+        try:
+            # Check for standard WAV header
+            if audio_bytes[:4] == b'RIFF':
+                pcm_data = audio_bytes[44:]
+            else:
+                pcm_data = audio_bytes
+
+            count = len(pcm_data) // 2
+            if count == 0:
+                return 0.0
+
+            import struct
+            shorts = struct.unpack(f"<{count}h", pcm_data[:count*2])
+            sum_squares = sum(s * s for s in shorts)
+            rms = (sum_squares / count) ** 0.5
+            return rms
+        except Exception:
+            return 0.0
+
     def _listen_arecord_loop(self):
-        """Zero-dependency chunk-based capture on Raspberry Pi using arecord."""
+        """Zero-dependency chunk-based capture on Raspberry Pi using arecord with energy VAD filtering."""
         tmp_wav = os.path.join(tempfile.gettempdir(), "pidog_mic_chunk.wav")
         while self._running:
             try:
-                # Record in 4-second chunks
+                # Record in 3-second chunks
                 cmd = [
                     "arecord",
                     "-q",
@@ -209,18 +233,24 @@ class MicrophoneWorker:
                     "-f", "S16_LE",
                     "-r", str(self.sample_rate),
                     "-c", "1",
-                    "-d", "4",
+                    "-d", "3",
                     tmp_wav
                 ]
                 proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
                 if proc.returncode == 0 and os.path.exists(tmp_wav) and self._running:
                     file_size = os.path.getsize(tmp_wav)
-                    # Check if contains valid audio (more than minimal header)
                     if file_size > 4000:
                         with open(tmp_wav, "rb") as f:
                             wav_bytes = f.read()
-                        logger.info(f"Captured audio via arecord ({len(wav_bytes)} bytes), publishing to ASR...")
-                        self.bus.publish("voice.input.audio", {"audio": wav_bytes})
+
+                        # Check RMS energy level (VAD) to ignore complete silence / low background noise
+                        rms = self._compute_rms_energy(wav_bytes)
+                        # Threshold for audible speech vs silence
+                        if rms >= 300:
+                            logger.info(f"Captured voice utterance via arecord ({len(wav_bytes)} bytes, energy={rms:.1f}), publishing to ASR...")
+                            self.bus.publish("voice.input.audio", {"audio": wav_bytes})
+                        else:
+                            logger.debug(f"Ignored silent audio chunk ({len(wav_bytes)} bytes, energy={rms:.1f} < 300)")
             except Exception as e:
                 logger.debug(f"Arecord capture exception: {e}")
                 time.sleep(0.5)

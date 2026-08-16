@@ -135,7 +135,7 @@ class SensorWorker:
 
             now = time.time()
             if dist >= 0:
-                # If obstacle is very close (< 15cm), publish immediately
+                # If obstacle is very close (< 15cm), publish obstacle event
                 if dist < 15.0:
                     self.bus.publish("sensor.ultrasonic.obstacle", {"distance": dist})
 

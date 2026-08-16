@@ -49,6 +49,21 @@ EMOTION_TAIL_MAP = {
 }
 
 
+# Action alias mapping to Pidog native actions and head gestures
+ACTION_ALIAS_MAP = {
+    "tilt_head": ("tilting_head", None),
+    "tilting_head": ("tilting_head", None),
+    "tilting_head_left": ("tilting_head_left", None),
+    "tilting_head_right": ("tilting_head_right", None),
+    "head_nod": ("head_up_down", None),
+    "nod": ("head_up_down", None),
+    "shake_head": ("shake_head", None),
+    "nod_lethargy": ("nod_lethargy", None),
+    "bark": ("head_bark", "single_bark_1.mp3"),
+    "howling": ("head_bark", "howling.mp3"),
+}
+
+
 class EmotionExpressor:
     """
     Subscribes to 'actuator.express' events on the EventBus and drives
@@ -182,12 +197,24 @@ class EmotionExpressor:
             logger.debug(f"Tail move error: {e}")
 
     def _do_action(self, action_name: str, speed: int = 50):
-        """Perform preset dog action."""
+        """Perform preset dog action with alias and fallback support."""
         try:
-            if hasattr(self.dog, "do_action"):
-                self.dog.do_action(action_name, speed=speed)
+            if not hasattr(self.dog, "do_action"):
+                return
+
+            # Resolve aliases (e.g. tilt_head -> tilting_head)
+            target_action = action_name
+            sound_effect = None
+            if action_name in ACTION_ALIAS_MAP:
+                target_action, sound_effect = ACTION_ALIAS_MAP[action_name]
+
+            # Play associated sound if any
+            if sound_effect:
+                self._play_sound(sound_effect)
+
+            self.dog.do_action(target_action, speed=speed)
         except Exception as e:
-            logger.debug(f"Do action error: {e}")
+            logger.debug(f"Do action error for '{action_name}': {e}")
 
     def _play_sound(self, sound_name: str):
         """Play sound effect file using Pidog music/speaker."""
