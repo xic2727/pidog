@@ -230,23 +230,13 @@ class TestEmotionExpressor(unittest.TestCase):
         speak_events = []
         self.bus.subscribe("actuator.speak", lambda data: speak_events.append(data))
 
-        # When dog does not have dog.speak method
-        del self.mock_dog.speak
-        self.bus.publish("actuator.express", {
-            "emotion": "speak",
-            "speak_text": "Woof woof"
-        })
-
-        self.assertEqual(len(speak_events), 1)
-        self.assertEqual(speak_events[0]["text"], "Woof woof")
-
-    def test_express_with_dog_speak_method(self):
-        self.mock_dog.speak = MagicMock()
         self.bus.publish("actuator.express", {
             "emotion": "speak",
             "speak_text": "Hello world"
         })
-        self.mock_dog.speak.assert_called_with("Hello world")
+
+        self.assertEqual(len(speak_events), 1)
+        self.assertEqual(speak_events[0]["text"], "Hello world")
 
 
 if __name__ == '__main__':

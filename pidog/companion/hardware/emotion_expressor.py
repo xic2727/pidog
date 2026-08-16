@@ -203,10 +203,7 @@ class EmotionExpressor:
     def _speak(self, text: str):
         """Publish or trigger TTS speak if requested."""
         try:
-            if hasattr(self.dog, "speak"):
-                self.dog.speak(text)
-            else:
-                # Publish event for TTS adapter worker to consume
-                self.bus.publish("actuator.speak", {"text": text})
+            # Publish event for TTS adapter and AudioPlayer to synthesize and output
+            self.bus.publish("actuator.speak", {"text": text})
         except Exception as e:
             logger.debug(f"Speak error: {e}")

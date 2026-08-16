@@ -180,7 +180,6 @@ class TestCompanionOrchestrator(unittest.TestCase):
         self.assertEqual(len(express_events), 1)
         self.assertEqual(express_events[0]["emotion"], "happy")
         self.assertEqual(express_events[0]["action"], "wag_tail")
-        self.assertEqual(express_events[0]["speak_text"], "汪！你好！")
 
         self.assertEqual(len(tts_events), 1)
         self.assertEqual(tts_events[0]["audio"], b"fake_tts_wav")

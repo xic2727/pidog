@@ -93,8 +93,10 @@ class AudioPlayer:
 class MicrophoneWorker:
     """
     Background microphone listener.
-    Continuously listens for speech using SpeechRecognition or arecord VAD,
-    and publishes raw WAV bytes to 'voice.input.audio' on the EventBus.
+    Supports:
+    1. SpeechRecognition (PyAudio / ALSA)
+    2. Zero-dependency arecord fallback (ALSA standard tool on Raspberry Pi)
+    Publishes raw WAV bytes to 'voice.input.audio' on the EventBus.
     """
 
     def __init__(
@@ -113,39 +115,51 @@ class MicrophoneWorker:
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        self._backend = "none"
         self._recognizer = None
         self._microphone = None
-        self._is_available = False
 
         self._init_audio_input()
 
     def _init_audio_input(self):
+        # 1. Try SpeechRecognition
         try:
             import speech_recognition as sr
             self._recognizer = sr.Recognizer()
             self._recognizer.energy_threshold = self.energy_threshold
             self._recognizer.pause_threshold = self.pause_threshold
             self._recognizer.dynamic_energy_threshold = self.dynamic_energy_threshold
-
-            # Attempt finding default microphone
             self._microphone = sr.Microphone(sample_rate=self.sample_rate)
-            self._is_available = True
-            logger.info("MicrophoneWorker initialized speech_recognition successfully.")
+            self._backend = "speech_recognition"
+            logger.info("MicrophoneWorker initialized with speech_recognition backend.")
+            return
         except Exception as e:
-            logger.warning(f"MicrophoneWorker could not initialize speech_recognition: {e}")
-            self._is_available = False
+            logger.debug(f"speech_recognition backend not available ({e}), falling back to arecord...")
+
+        # 2. Try ALSA arecord (built into Raspberry Pi OS)
+        try:
+            res = subprocess.run(["which", "arecord"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if res.returncode == 0:
+                self._backend = "arecord"
+                logger.info("MicrophoneWorker initialized with ALSA arecord backend.")
+                return
+        except Exception as e:
+            logger.debug(f"arecord check failed: {e}")
+
+        logger.warning("No microphone backend available (install SpeechRecognition or ALSA arecord).")
+        self._backend = "none"
 
     def is_available(self) -> bool:
-        return self._is_available
+        return self._backend != "none"
 
     def start(self):
         """Start background microphone listening loop."""
-        if self._running or not self._is_available:
+        if self._running or not self.is_available():
             return
         self._running = True
-        self._thread = threading.Thread(target=self._listen_loop, name="MicrophoneWorker", daemon=True)
+        self._thread = threading.Thread(target=self._run_loop, name="MicrophoneWorker", daemon=True)
         self._thread.start()
-        logger.info("Microphone listening worker started.")
+        logger.info(f"Microphone listening worker started (backend: {self._backend}).")
 
     def stop(self):
         """Stop background microphone listening loop."""
@@ -155,17 +169,20 @@ class MicrophoneWorker:
             self._thread = None
         logger.info("Microphone listening worker stopped.")
 
-    def _listen_loop(self):
-        import speech_recognition as sr
+    def _run_loop(self):
+        if self._backend == "speech_recognition":
+            self._listen_sr_loop()
+        elif self._backend == "arecord":
+            self._listen_arecord_loop()
 
+    def _listen_sr_loop(self):
+        import speech_recognition as sr
         while self._running:
             try:
                 with self._microphone as source:
-                    # Adjust for ambient noise once on start
                     if self.dynamic_energy_threshold:
                         self._recognizer.adjust_for_ambient_noise(source, duration=0.5)
 
-                    logger.debug("Listening for voice activity...")
                     audio_data = self._recognizer.listen(source, timeout=3.0, phrase_time_limit=10.0)
 
                     if audio_data and self._running:
@@ -173,10 +190,43 @@ class MicrophoneWorker:
                         if wav_bytes and len(wav_bytes) > 2000:
                             logger.info(f"Captured voice utterance ({len(wav_bytes)} bytes), publishing to ASR...")
                             self.bus.publish("voice.input.audio", {"audio": wav_bytes})
-
             except sr.WaitTimeoutError:
-                # Normal timeout when no speech heard
                 continue
             except Exception as e:
-                logger.debug(f"Microphone capture cycle exception: {e}")
+                logger.debug(f"SR capture cycle exception: {e}")
                 time.sleep(0.5)
+
+    def _listen_arecord_loop(self):
+        """Zero-dependency chunk-based capture on Raspberry Pi using arecord."""
+        tmp_wav = os.path.join(tempfile.gettempdir(), "pidog_mic_chunk.wav")
+        while self._running:
+            try:
+                # Record in 4-second chunks
+                cmd = [
+                    "arecord",
+                    "-q",
+                    "-D", "default",
+                    "-f", "S16_LE",
+                    "-r", str(self.sample_rate),
+                    "-c", "1",
+                    "-d", "4",
+                    tmp_wav
+                ]
+                proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                if proc.returncode == 0 and os.path.exists(tmp_wav) and self._running:
+                    file_size = os.path.getsize(tmp_wav)
+                    # Check if contains valid audio (more than minimal header)
+                    if file_size > 4000:
+                        with open(tmp_wav, "rb") as f:
+                            wav_bytes = f.read()
+                        logger.info(f"Captured audio via arecord ({len(wav_bytes)} bytes), publishing to ASR...")
+                        self.bus.publish("voice.input.audio", {"audio": wav_bytes})
+            except Exception as e:
+                logger.debug(f"Arecord capture exception: {e}")
+                time.sleep(0.5)
+            finally:
+                if os.path.exists(tmp_wav):
+                    try:
+                        os.remove(tmp_wav)
+                    except Exception:
+                        pass

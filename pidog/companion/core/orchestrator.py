@@ -81,7 +81,21 @@ class CompanionOrchestrator:
         unsub_voice = self.bus.subscribe("voice.input.text", self._on_voice_text)
         unsub_audio = self.bus.subscribe("voice.input.audio", self._on_voice_audio)
         unsub_dialogue = self.bus.subscribe("dialogue.request", self._on_dialogue_request)
-        self._unsub_list.extend([unsub_voice, unsub_audio, unsub_dialogue])
+        unsub_speak = self.bus.subscribe("actuator.speak", self._on_actuator_speak)
+        self._unsub_list.extend([unsub_voice, unsub_audio, unsub_dialogue, unsub_speak])
+
+    def _on_actuator_speak(self, data: Any):
+        """Synthesize and play direct speech requests."""
+        if not data:
+            return
+        text = data.get("text") if isinstance(data, dict) else str(data)
+        if text and self.tts and self.tts.is_available():
+            try:
+                audio_bytes = self.tts.synthesize(text)
+                if audio_bytes:
+                    self.bus.publish("tts.audio.ready", {"text": text, "audio": audio_bytes})
+            except Exception as e:
+                logger.error(f"TTS synthesis for speak failed: {e}")
 
     def start(self):
         """Start async processing worker thread."""
@@ -295,7 +309,6 @@ class CompanionOrchestrator:
         express_payload = {
             "emotion": emotion or "neutral",
             "action": action,
-            "speak_text": clean_text,
         }
         self.bus.publish("actuator.express", express_payload)
 
