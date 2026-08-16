@@ -1,0 +1,49 @@
+from dataclasses import dataclass
+from enum import Enum
+import time
+import threading
+
+
+class MoodType(Enum):
+    HAPPY = "happy"
+    CURIOUS = "curious"
+    NEUTRAL = "neutral"
+    SCARED = "scared"
+    SLEEPY = "sleepy"
+    CONFUSED = "confused"
+    SAD = "sad"
+
+
+@dataclass
+class PetState:
+    energy: float = 100.0     # 0 ~ 100
+    boredom: float = 0.0      # 0 ~ 100
+    intimacy: float = 50.0    # 0 ~ 100
+    mood: MoodType = MoodType.NEUTRAL
+    last_interaction_time: float = None
+
+    def __post_init__(self):
+        if self.last_interaction_time is None:
+            self.last_interaction_time = time.time()
+        self._lock = threading.RLock()
+
+    def tick(self, delta_seconds: float = 1.0):
+        """Periodically decay energy and increase boredom."""
+        with self._lock:
+            # Energy decays slowly
+            self.energy = max(0.0, min(100.0, self.energy - (0.05 * delta_seconds)))
+            # Boredom increases over time
+            self.boredom = max(0.0, min(100.0, self.boredom + (0.1 * delta_seconds)))
+
+            if self.energy < 20.0:
+                self.mood = MoodType.SLEEPY
+            elif self.boredom > 70.0:
+                self.mood = MoodType.NEUTRAL
+
+    def on_interact(self, intimacy_bonus: float = 2.0, mood: MoodType = MoodType.HAPPY):
+        """Handle interaction event to reduce boredom and increase intimacy."""
+        with self._lock:
+            self.last_interaction_time = time.time()
+            self.boredom = max(0.0, self.boredom - 20.0)
+            self.intimacy = max(0.0, min(100.0, self.intimacy + intimacy_bonus))
+            self.mood = mood

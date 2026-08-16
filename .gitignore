@@ -1,0 +1,14 @@
+.vscode/*
+dev/*
+photo
+test/photo*
+test/scene/*
+backups/*
+**secret*
+.env
+.env.local
+.env.*.local
+__pycache__/
+*.py[cod]
+.superpowers/
+.pytest_cache/
