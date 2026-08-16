@@ -124,7 +124,25 @@ class MicrophoneWorker:
         self._init_audio_input()
 
     def _init_audio_input(self):
-        # 1. Try SpeechRecognition
+        # Prefer ALSA arecord on Linux/RPi when specific ALSA device is configured
+        # Or if SpeechRecognition is not installed / PyAudio fails
+        logger.info(f"Configuring audio input device: '{self.device}'")
+
+        # 1. Check arecord first if we are on Linux/RPi or if SpeechRecognition fails with custom ALSA devices
+        has_arecord = False
+        try:
+            res = subprocess.run(["which", "arecord"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            has_arecord = (res.returncode == 0)
+        except Exception:
+            has_arecord = False
+
+        # If on Raspberry Pi / Linux and device is explicitly set (like plughw:1,0) or arecord exists
+        if has_arecord:
+            self._backend = "arecord"
+            logger.info(f"MicrophoneWorker initialized with ALSA arecord backend (device: {self.device}).")
+            return
+
+        # 2. Try SpeechRecognition
         try:
             import speech_recognition as sr
             self._recognizer = sr.Recognizer()
@@ -136,17 +154,7 @@ class MicrophoneWorker:
             logger.info("MicrophoneWorker initialized with speech_recognition backend.")
             return
         except Exception as e:
-            logger.debug(f"speech_recognition backend not available ({e}), falling back to arecord...")
-
-        # 2. Try ALSA arecord (built into Raspberry Pi OS)
-        try:
-            res = subprocess.run(["which", "arecord"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            if res.returncode == 0:
-                self._backend = "arecord"
-                logger.info("MicrophoneWorker initialized with ALSA arecord backend.")
-                return
-        except Exception as e:
-            logger.debug(f"arecord check failed: {e}")
+            logger.debug(f"speech_recognition backend not available ({e})")
 
         logger.warning("No microphone backend available (install SpeechRecognition or ALSA arecord).")
         self._backend = "none"
@@ -247,12 +255,13 @@ class MicrophoneWorker:
 
                         # Check RMS energy level (VAD) to ignore complete silence / low background noise
                         rms = self._compute_rms_energy(wav_bytes)
-                        # Threshold for audible speech vs silence (relaxed to 150 for Pi Zero mic gain)
-                        if rms >= 150:
-                            logger.info(f"Captured voice utterance via arecord ({len(wav_bytes)} bytes, energy={rms:.1f}), publishing to ASR...")
+                        logger.info(f"[Mic Audio Captured] size={len(wav_bytes)} bytes, energy={rms:.1f}")
+                        # Threshold for audible speech vs silence (50+ captures normal/quiet speech, rejects absolute silence)
+                        if rms >= 50:
+                            logger.info(f"Publishing voice utterance to ASR (energy={rms:.1f} >= 50)...")
                             self.bus.publish("voice.input.audio", {"audio": wav_bytes})
                         else:
-                            logger.debug(f"Ignored silent audio chunk ({len(wav_bytes)} bytes, energy={rms:.1f} < 150)")
+                            logger.info(f"Skipped silent chunk (energy={rms:.1f} < 50)")
             except Exception as e:
                 logger.debug(f"Arecord capture exception: {e}")
                 time.sleep(0.5)

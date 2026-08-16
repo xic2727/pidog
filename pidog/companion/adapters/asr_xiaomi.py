@@ -116,6 +116,7 @@ class XiaomiASR(BaseASR):
         }
 
         try:
+            logger.info(f"Sending {len(raw_bytes)} bytes audio to Xiaomi ASR ({endpoint}, model={self.model})...")
             response = requests.post(
                 endpoint,
                 headers=headers,
@@ -124,6 +125,7 @@ class XiaomiASR(BaseASR):
             )
             response.raise_for_status()
             result_json = response.json()
+            logger.info(f"Xiaomi ASR response raw: {result_json}")
 
             # 1. Parse OpenAI Chat Completion response format (choices[0].message.content)
             choices = result_json.get("choices", [])
