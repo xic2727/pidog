@@ -38,6 +38,7 @@ from pidog.companion.adapters.factory import AdapterFactory
 from pidog.companion.hardware.camera_helper import CameraHelper
 from pidog.companion.hardware.sensor_worker import SensorWorker
 from pidog.companion.hardware.emotion_expressor import EmotionExpressor
+from pidog.companion.hardware.audio_worker import MicrophoneWorker, AudioPlayer
 from pidog.companion.core.orchestrator import CompanionOrchestrator
 
 logging.basicConfig(
@@ -132,6 +133,7 @@ class EmbodiedPetCompanionApp:
             critical_voltage_threshold=self.config.battery_critical_voltage,
         )
         self.emotion_expressor = EmotionExpressor(self.dog, self.bus)
+        self.mic_worker = MicrophoneWorker(self.bus)
         self.orchestrator = CompanionOrchestrator(
             config=self.config,
             bus=self.bus,
@@ -220,6 +222,8 @@ class EmbodiedPetCompanionApp:
         self.behavior_engine.start()
         self.sensor_worker.start()
         self.orchestrator.start()
+        if hasattr(self, "mic_worker") and self.mic_worker:
+            self.mic_worker.start()
 
         # Welcome express
         self.bus.publish("actuator.express", {
@@ -239,6 +243,8 @@ class EmbodiedPetCompanionApp:
         self._stop_event.set()
 
         # Stop orchestrator and workers
+        if hasattr(self, "mic_worker") and self.mic_worker:
+            self.mic_worker.stop()
         self.orchestrator.stop()
         self.sensor_worker.stop()
         self.behavior_engine.stop()

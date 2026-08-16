@@ -2,6 +2,7 @@ import logging
 import threading
 from typing import Optional, Any, Dict
 from ..core.event_bus import EventBus
+from .audio_worker import AudioPlayer
 
 logger = logging.getLogger(__name__)
 
@@ -69,13 +70,25 @@ class EmotionExpressor:
         self._subscribe()
 
     def _subscribe(self):
-        self._unsub = self.bus.subscribe("actuator.express", self.express)
+        self._unsub_express = self.bus.subscribe("actuator.express", self.express)
+        self._unsub_tts = self.bus.subscribe("tts.audio.ready", self._on_tts_audio)
 
     def close(self):
         """Unsubscribe and cleanup."""
-        if self._unsub:
-            self._unsub()
-            self._unsub = None
+        if hasattr(self, "_unsub_express") and self._unsub_express:
+            self._unsub_express()
+            self._unsub_express = None
+        if hasattr(self, "_unsub_tts") and self._unsub_tts:
+            self._unsub_tts()
+            self._unsub_tts = None
+
+    def _on_tts_audio(self, data: Dict[str, Any]):
+        """Play synthesized TTS audio from Xiaomi MiMo TTS."""
+        if not isinstance(data, dict):
+            return
+        audio_bytes = data.get("audio")
+        if audio_bytes:
+            AudioPlayer.play_wav_bytes(audio_bytes)
 
     def express(self, command: Dict[str, Any]):
         """
