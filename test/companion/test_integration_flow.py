@@ -26,7 +26,9 @@ class TestCompanionIntegrationFlow(unittest.TestCase):
 
     def setUp(self):
         self.bus = EventBus()
-        self.config = CompanionConfig()
+        # Classic talking-dog mode keeps the TTS pipeline exercised here;
+        # the mute builtin mode is covered in test_orchestrator.TestMuteDogMode.
+        self.config = CompanionConfig(voice_mode="tts")
         self.mock_dog = MagicMock()
 
         # Mock adapters
@@ -80,8 +82,9 @@ class TestCompanionIntegrationFlow(unittest.TestCase):
         self.assertGreater(self.state.intimacy, initial_intimacy)
         self.assertEqual(self.state.mood, MoodType.HAPPY)
 
-        # Verify hardware actuation
-        self.mock_dog.do_action.assert_called_with("wag_tail", speed=50)
+        # Verify hardware actuation (familiar-level pool: wag_tail or head_up_down)
+        action_calls = [c[0][0] for c in self.mock_dog.do_action.call_args_list]
+        self.assertIn(action_calls[0], ("wag_tail", "head_up_down"))
         self.mock_dog.rgb_strip.set_mode.assert_called_with("breath", "yellow", bps=1.5)
 
     def test_voice_dialogue_to_vlm_to_tts_flow(self):
@@ -118,7 +121,7 @@ class TestCompanionIntegrationFlow(unittest.TestCase):
         self.assertEqual(tts_events[0]["audio"], b"audio_wav_data")
 
         # Verify physical expression
-        self.mock_dog.do_action.assert_called_with("wag_tail", speed=50)
+        self.mock_dog.do_action.assert_called_with("wag_tail", step_count=1, speed=50)
         self.mock_dog.rgb_strip.set_mode.assert_called_with("breath", "yellow", bps=1.5)
 
     def test_visual_dialogue_multimodal_flow(self):
@@ -142,7 +145,7 @@ class TestCompanionIntegrationFlow(unittest.TestCase):
         self.assertEqual(call_kwargs["image_data"], b"fake_jpeg_frame")
 
         # Verify hardware action (tilt_head alias resolved to tilting_head)
-        self.mock_dog.do_action.assert_called_with("tilting_head", speed=50)
+        self.mock_dog.do_action.assert_called_with("tilting_head", step_count=1, speed=50)
 
     def test_lifecycle_and_graceful_shutdown(self):
         """Test complete system start and safe shutdown without hanging or leaking threads."""

@@ -9,6 +9,7 @@ import logging
 import tempfile
 from typing import Optional, Any
 from ..core.event_bus import EventBus
+from .clap_detector import ClapDetector
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,7 @@ class MicrophoneWorker:
         energy_threshold: int = 2000,
         pause_threshold: float = 0.8,
         dynamic_energy_threshold: bool = True,
+        enable_clap_detection: bool = True,
     ):
         self.bus = bus
         self.device = device or os.getenv("AUDIO_INPUT_DEVICE", "plughw:1,0")
@@ -130,6 +132,9 @@ class MicrophoneWorker:
         self.energy_threshold = energy_threshold
         self.pause_threshold = pause_threshold
         self.dynamic_energy_threshold = dynamic_energy_threshold
+        # Reflex-level clap commands: 1/2/3 claps handled without LLM roundtrip
+        self.enable_clap_detection = enable_clap_detection
+        self.clap_detector = ClapDetector(sample_rate=sample_rate) if enable_clap_detection else None
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -291,6 +296,20 @@ class MicrophoneWorker:
                         # Check RMS energy level (VAD) to ignore complete silence / low background noise
                         rms = self._compute_rms_energy(wav_bytes)
                         logger.info(f"[Mic Audio Captured] size={len(wav_bytes)} bytes, energy={rms:.1f}")
+
+                        # Clap commands take priority: transient burst patterns are
+                        # reflex commands, not speech, so skip ASR when matched.
+                        if self.clap_detector:
+                            try:
+                                clap_count = self.clap_detector.analyze(wav_bytes)
+                            except Exception as e:
+                                logger.debug(f"Clap detection error: {e}")
+                                clap_count = None
+                            if clap_count:
+                                logger.info(f"Clap pattern detected: {clap_count} clap(s)")
+                                self.bus.publish("sensor.clap.detected", {"count": clap_count, "energy": rms})
+                                continue
+
                         # Threshold for audible speech vs silence
                         if rms >= 50:
                             logger.info(f"Publishing voice utterance to ASR (energy={rms:.1f} >= 50)...")

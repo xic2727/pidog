@@ -95,6 +95,21 @@ class CompanionConfig:
     enable_touch: bool = True
     enable_sound_direction: bool = True
     enable_battery_monitor: bool = True
+    # Voice mode:
+    #   "builtin" - mute dog: built-in sound effects only, no TTS speech
+    #   "tts"     - classic talking dog: LLM replies spoken via TTS
+    voice_mode: str = field(default_factory=lambda: os.getenv("PIDOG_VOICE_MODE", "builtin"))
+    # Clap-count reflex commands (1 sit / 2 spin / 3 come here)
+    enable_clap_commands: bool = field(default_factory=lambda: os.getenv("PIDOG_CLAP_COMMANDS", "1").lower() not in ("0", "false", "no"))
+    # Approach behavior (turn toward sound source and walk up)
+    enable_approach: bool = field(default_factory=lambda: os.getenv("PIDOG_APPROACH", "1").lower() not in ("0", "false", "no"))
+    approach_turn_degrees_per_step: float = field(default_factory=lambda: float(os.getenv("PIDOG_TURN_DEG_PER_STEP", "22.5")))
+    approach_forward_steps: int = field(default_factory=lambda: int(os.getenv("PIDOG_APPROACH_FORWARD_STEPS", "4")))
+    # Reflex layer tuning
+    touch_cooldown: float = field(default_factory=lambda: float(os.getenv("PIDOG_TOUCH_COOLDOWN", "1.5")))
+    neglect_timeout: float = field(default_factory=lambda: float(os.getenv("PIDOG_NEGLECT_TIMEOUT", "300")))
+    # Dog voice sound library cooldown (seconds between same-tag plays)
+    sound_cooldown: float = field(default_factory=lambda: float(os.getenv("PIDOG_SOUND_COOLDOWN", "2.0")))
     battery_check_interval: float = field(default_factory=lambda: float(os.getenv("BATTERY_CHECK_INTERVAL", "15.0")))
     battery_low_voltage: float = field(default_factory=lambda: float(os.getenv("BATTERY_LOW_VOLTAGE", "7.0")))
     battery_critical_voltage: float = field(default_factory=lambda: float(os.getenv("BATTERY_CRITICAL_VOLTAGE", "6.6")))

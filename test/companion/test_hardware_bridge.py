@@ -1,3 +1,4 @@
+import os
 import unittest
 import time
 from unittest.mock import MagicMock, patch
@@ -203,15 +204,17 @@ class TestEmotionExpressor(unittest.TestCase):
         self.bus.publish("actuator.express", {
             "emotion": "happy",
             "action": "wag_tail",
-            "sound": "bark.mp3"
+            "sound": "happy_bark"
         })
 
         # Check rgb
         self.mock_dog.rgb_strip.set_mode.assert_called_with("breath", "yellow", bps=1.5)
         # Check action
-        self.mock_dog.do_action.assert_called_with("wag_tail", speed=50)
-        # Check sound
-        self.mock_dog.music.sound_play.assert_called_with("bark.mp3")
+        self.mock_dog.do_action.assert_called_with("wag_tail", step_count=1, speed=50)
+        # Check sound: semantic tag resolved to a real built-in file, played via dog.speak
+        speak_args = self.mock_dog.speak.call_args
+        self.assertIsNotNone(speak_args)
+        self.assertTrue(os.path.isfile(speak_args[0][0]))
 
     def test_express_custom_rgb_and_head_tail(self):
         self.bus.publish("actuator.express", {

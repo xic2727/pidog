@@ -71,8 +71,53 @@ class TestBehaviorEngine(unittest.TestCase):
         self.assertGreater(self.state.intimacy, 50.0)
         self.assertEqual(self.state.mood, MoodType.HAPPY)
         self.assertEqual(len(events), 1)
+        # Default intimacy 50 -> 'familiar' pool: happy wag or nod + happy bark
         self.assertEqual(events[0]["emotion"], "happy")
-        self.assertEqual(events[0]["action"], "wag_tail")
+        self.assertIn(events[0]["action"], ("wag_tail", "head_up_down"))
+        self.assertEqual(events[0]["sound"], "happy_bark")
+
+    def test_head_touch_coquettish_at_high_intimacy(self):
+        self.state.intimacy = 90.0  # devoted level
+        events = []
+        self.bus.subscribe("actuator.express", lambda data: events.append(data))
+
+        self.bus.publish("sensor.touch.head", {"type": "touch"})
+
+        self.assertEqual(len(events), 1)
+        self.assertIn(events[0]["sound"], ("enchanted",))
+        self.assertIn(events[0]["action"], ("lie_with_hands_out", "wag_tail"))
+
+    def test_head_touch_cooldown(self):
+        events = []
+        self.bus.subscribe("actuator.express", lambda data: events.append(data))
+
+        self.bus.publish("sensor.touch.head", {"type": "touch"})
+        self.bus.publish("sensor.touch.head", {"type": "touch"})
+
+        # Second touch within cooldown: no second full reaction
+        self.assertEqual(len(events), 1)
+
+    def test_sulking_after_neglect(self):
+        self.state.intimacy = 90.0  # devoted: sulks when neglected
+        self.state.last_interaction_time = time.time() - 400.0
+        events = []
+        self.bus.subscribe("actuator.express", lambda data: events.append(data))
+
+        self.engine.start()
+        time.sleep(0.3)
+
+        # Sulking expressed
+        self.assertTrue(self.state.is_sulking)
+        self.assertEqual(events[0]["emotion"], "sad")
+
+        # First touch while sulking: cold shoulder (whine), no coquettish pool.
+        # Must happen before stop(): stop() unsubscribes reflex handlers.
+        self.bus.publish("sensor.touch.head", {"type": "touch"})
+        self.engine.stop()
+
+        self.assertEqual(events[-1]["sound"], "whine")
+        self.assertIn("head", events[-1])
+        self.assertFalse(self.state.is_sulking)
 
     def test_body_touch_reaction(self):
         events = []
@@ -97,25 +142,65 @@ class TestBehaviorEngine(unittest.TestCase):
         self.assertEqual(events[0]["emotion"], "scared")
         self.assertEqual(events[0]["action"], "lie")
 
+    def test_suspended_bliss_at_high_intimacy(self):
+        self.state.intimacy = 90.0  # devoted: loves being held
+        events = []
+        self.bus.subscribe("actuator.express", lambda data: events.append(data))
+
+        self.bus.publish("sensor.imu.suspended", {"status": "suspended"})
+
+        self.assertEqual(self.state.mood, MoodType.EXCITED)
+        self.assertEqual(events[0]["sound"], "enchanted")
+        self.assertEqual(events[0]["action"], "lie_with_hands_out")
+
+    def test_clap_commands(self):
+        events = []
+        approach_events = []
+        self.bus.subscribe("actuator.express", lambda data: events.append(data))
+        self.bus.subscribe("behavior.approach", lambda data: approach_events.append(data))
+
+        # 1 clap -> sit
+        self.bus.publish("sensor.clap.detected", {"count": 1})
+        self.assertEqual(events[0]["action"], "sit")
+
+        # 2 claps -> spin around
+        self.bus.publish("sensor.clap.detected", {"count": 2})
+        self.assertEqual(events[1]["action"], "turn_right")
+        self.assertEqual(events[1]["step_count"], 8)
+
+        # 3 claps with a fresh sound direction -> approach event
+        self.bus.publish("sensor.sound.direction", {"angle": 120})
+        self.bus.publish("sensor.clap.detected", {"count": 3})
+        self.assertEqual(len(approach_events), 1)
+        self.assertEqual(approach_events[0]["angle"], 120)
+
+        # 3 claps without direction info -> confused look instead
+        self.engine._last_sound_direction = None
+        self.bus.publish("sensor.clap.detected", {"count": 3})
+        self.assertEqual(len(approach_events), 1)
+        self.assertEqual(events[-1]["sound"], "confused")
+
     def test_battery_low_and_critical_reactions(self):
         events = []
         self.bus.subscribe("actuator.express", lambda data: events.append(data))
 
-        # 1. Low battery
+        # 1. Low battery: sleepy pant, no human speech
         self.bus.publish("sensor.battery.low", {"voltage": 6.9})
         self.assertLessEqual(self.state.energy, 15.0)
         self.assertEqual(self.state.mood, MoodType.SLEEPY)
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["emotion"], "sleepy")
-        self.assertIn("主人", events[0]["speak_text"])
+        self.assertEqual(events[0]["sound"], "pant")
+        self.assertNotIn("speak_text", events[0])
 
-        # 2. Critical battery
+        # 2. Critical battery: sad whine
         self.bus.publish("sensor.battery.critical", {"voltage": 6.4})
         self.assertEqual(self.state.energy, 0.0)
         self.assertEqual(self.state.mood, MoodType.SAD)
         self.assertEqual(len(events), 2)
         self.assertEqual(events[1]["emotion"], "sad")
         self.assertEqual(events[1]["action"], "lie")
+        self.assertEqual(events[1]["sound"], "whine")
 
     def test_autonomous_heartbeat_tick(self):
         self.state.boredom = 65.0

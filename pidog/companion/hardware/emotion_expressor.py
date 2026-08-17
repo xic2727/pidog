@@ -1,7 +1,9 @@
 import logging
+import os
 import threading
 from typing import Optional, Any, Dict
 from ..core.event_bus import EventBus
+from ..behavior.sound_library import SoundLibrary
 from .audio_worker import AudioPlayer
 
 logger = logging.getLogger(__name__)
@@ -59,8 +61,8 @@ ACTION_ALIAS_MAP = {
     "nod": ("head_up_down", None),
     "shake_head": ("shake_head", None),
     "nod_lethargy": ("nod_lethargy", None),
-    "bark": ("head_bark", "single_bark_1.mp3"),
-    "howling": ("head_bark", "howling.mp3"),
+    "bark": ("head_bark", "happy_bark"),
+    "howling": ("head_bark", "howling"),
 }
 
 
@@ -74,13 +76,17 @@ class EmotionExpressor:
     - Sound effects & TTS speech output
     """
 
-    def __init__(self, dog: Any, bus: EventBus):
+    def __init__(self, dog: Any, bus: EventBus, sound_library: Optional[SoundLibrary] = None):
         """
         :param dog: Instance of Pidog or mock Pidog.
         :param bus: EventBus instance.
+        :param sound_library: SoundLibrary resolving semantic sound tags
+            (e.g. 'coquettish') to built-in audio files. A default shared
+            library is created when omitted.
         """
         self.dog = dog
         self.bus = bus
+        self.sound_library = sound_library or SoundLibrary()
         self._unsub = None
         self._subscribe()
 
@@ -131,6 +137,7 @@ class EmotionExpressor:
         sound = command.get("sound")
         speak_text = command.get("speak_text")
         speed = command.get("speed", 50)
+        step_count = command.get("step_count", 1)
 
         # 1. Update RGB LED Strip
         self._set_rgb(emotion, rgb)
@@ -149,7 +156,7 @@ class EmotionExpressor:
 
         # 4. Drive Body Preset Action
         if action is not None:
-            self._do_action(action, speed=speed)
+            self._do_action(action, speed=speed, step_count=step_count)
 
         # 5. Play Sound Effect
         if sound:
@@ -196,7 +203,7 @@ class EmotionExpressor:
         except Exception as e:
             logger.debug(f"Tail move error: {e}")
 
-    def _do_action(self, action_name: str, speed: int = 50):
+    def _do_action(self, action_name: str, speed: int = 50, step_count: int = 1):
         """Perform preset dog action with alias and fallback support."""
         try:
             if not hasattr(self.dog, "do_action"):
@@ -212,18 +219,45 @@ class EmotionExpressor:
             if sound_effect:
                 self._play_sound(sound_effect)
 
-            self.dog.do_action(target_action, speed=speed)
+            self.dog.do_action(target_action, step_count=step_count, speed=speed)
         except Exception as e:
             logger.debug(f"Do action error for '{action_name}': {e}")
 
     def _play_sound(self, sound_name: str):
-        """Play sound effect file using Pidog music/speaker."""
+        """Play a sound effect by semantic tag or file path.
+
+        Semantic tags (e.g. 'coquettish', 'happy_bark') are resolved through
+        the SoundLibrary with variant selection and cooldown; direct file
+        names/paths still work as fallback.
+        """
         try:
+            path = None
+            # 1. Semantic tag via SoundLibrary (respects cooldown)
+            if self.sound_library and self.sound_library.is_known_tag(sound_name):
+                path = self.sound_library.resolve(sound_name)
+                if path is None:  # cooling down, skip silently
+                    return
+            # 2. Direct file path / name fallback
+            elif os.path.isfile(sound_name):
+                path = sound_name
+
+            if not path:
+                logger.debug(f"Unknown sound '{sound_name}', skipping.")
+                return
+
+            # Prefer Pidog.speak (handles absolute paths + threaded playback)
+            if hasattr(self.dog, "speak"):
+                self.dog.speak(path)
+                return
             if hasattr(self.dog, "music") and self.dog.music:
+                if hasattr(self.dog.music, "sound_play_threading"):
+                    self.dog.music.sound_play_threading(path)
+                    return
                 if hasattr(self.dog.music, "sound_play"):
-                    self.dog.music.sound_play(sound_name)
-                elif hasattr(self.dog.music, "play"):
-                    self.dog.music.play(sound_name)
+                    self.dog.music.sound_play(path)
+                    return
+            # Dev machine fallback
+            AudioPlayer.play_file(path)
         except Exception as e:
             logger.debug(f"Play sound error: {e}")
 

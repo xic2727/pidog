@@ -7,6 +7,7 @@ from typing import Optional, Dict, Any, List, Tuple, Union
 
 from .event_bus import EventBus
 from .context import ConversationContext
+from .sensor_context import SensorContext
 from ..config import CompanionConfig
 from ..adapters.base import BaseASR, BaseTTS, BaseVLM
 from ..adapters.factory import AdapterFactory
@@ -25,6 +26,8 @@ DEFAULT_VISION_KEYWORDS = [
 # Supported tag formats:
 # [action:wag_tail], [action: sit], <action>bark</action>, [act:xxx]
 # [emotion:happy], [emotion: sad], <emotion>excited</emotion>, [emo:xxx]
+# [sound:coquettish], [sound: happy_bark], <sound>howling</sound>
+# [owner_emotion:sad], [owner_emotion: happy], <owner_emotion>angry</owner_emotion>
 ACTION_TAG_REGEX = re.compile(
     r'(?:\[(?:action|act)\s*:\s*([a-zA-Z0-9_\-]+)\s*\])|(?:<(?:action|act)>([a-zA-Z0-9_\-]+)</(?:action|act)>)',
     re.IGNORECASE
@@ -33,6 +36,18 @@ EMOTION_TAG_REGEX = re.compile(
     r'(?:\[(?:emotion|emo)\s*:\s*([a-zA-Z0-9_\-]+)\s*\])|(?:<(?:emotion|emo)>([a-zA-Z0-9_\-]+)</(?:emotion|emo)>)',
     re.IGNORECASE
 )
+SOUND_TAG_REGEX = re.compile(
+    r'(?:\[(?:sound|snd)\s*:\s*([a-zA-Z0-9_\-]+)\s*\])|(?:<(?:sound|snd)>([a-zA-Z0-9_\-]+)</(?:sound|snd)>)',
+    re.IGNORECASE
+)
+OWNER_EMOTION_TAG_REGEX = re.compile(
+    r'(?:\[owner_emotion\s*:\s*([a-zA-Z0-9_\-]+)\s*\])|(?:<owner_emotion>([a-zA-Z0-9_\-]+)</owner_emotion>)',
+    re.IGNORECASE
+)
+ALL_TAG_REGEXES = (ACTION_TAG_REGEX, EMOTION_TAG_REGEX, SOUND_TAG_REGEX, OWNER_EMOTION_TAG_REGEX)
+
+# Action names that mean "move toward the sound source / owner"
+APPROACH_ACTIONS = {"approach", "come", "come_here", "comeover", "come_over", "goto_owner", "run_to_owner"}
 
 
 class CompanionOrchestrator:
@@ -55,6 +70,8 @@ class CompanionOrchestrator:
         camera: Optional[CameraHelper] = None,
         context: Optional[ConversationContext] = None,
         vision_keywords: Optional[List[str]] = None,
+        state: Optional[Any] = None,
+        sensor_context: Optional[SensorContext] = None,
     ):
         self.config = config or CompanionConfig()
         self.bus = bus or EventBus()
@@ -67,6 +84,8 @@ class CompanionOrchestrator:
             system_prompt=self.config.vlm.system_prompt if hasattr(self.config, "vlm") else None
         )
         self.vision_keywords = vision_keywords or list(DEFAULT_VISION_KEYWORDS)
+        # Recent sensor/interaction snapshot appended to prompts
+        self.sensor_context = sensor_context or SensorContext(self.bus, state=state)
 
         self._running = False
         self._worker_thread: Optional[threading.Thread] = None
@@ -85,11 +104,17 @@ class CompanionOrchestrator:
         self._unsub_list.extend([unsub_voice, unsub_audio, unsub_dialogue, unsub_speak])
 
     def _on_actuator_speak(self, data: Any):
-        """Synthesize and play direct speech requests."""
+        """Synthesize and play direct speech requests (tts voice mode only)."""
         if not data:
             return
         text = data.get("text") if isinstance(data, dict) else str(data)
-        if text and self.tts and self.tts.is_available():
+        if not text:
+            return
+        # Mute dog: no human-voice speech, log inner voice instead
+        if getattr(self.config, "voice_mode", "builtin") != "tts":
+            logger.info(f"[Mute dog inner voice] {text}")
+            return
+        if self.tts and self.tts.is_available():
             try:
                 audio_bytes = self.tts.synthesize(text)
                 if audio_bytes:
@@ -116,6 +141,8 @@ class CompanionOrchestrator:
                 except Exception as e:
                     logger.debug(f"Error during unsubscribe: {e}")
             self._unsub_list.clear()
+            if self.sensor_context:
+                self.sensor_context.close()
 
         # Signal queue
         self._task_queue.put(None)
@@ -204,37 +231,45 @@ class CompanionOrchestrator:
         return False
 
     @staticmethod
+    def extract_semantic_tags(text: str) -> Dict[str, Optional[str]]:
+        """
+        Extract [action:xxx], [emotion:xxx], [sound:xxx] and [owner_emotion:xxx]
+        tags from model output.
+        Returns dict with keys: action, emotion, sound, owner_emotion, clean_text
+        """
+        result: Dict[str, Optional[str]] = {
+            "action": None, "emotion": None, "sound": None, "owner_emotion": None, "clean_text": "",
+        }
+        if not text:
+            return result
+
+        for regex, key in (
+            (ACTION_TAG_REGEX, "action"),
+            (EMOTION_TAG_REGEX, "emotion"),
+            (SOUND_TAG_REGEX, "sound"),
+            (OWNER_EMOTION_TAG_REGEX, "owner_emotion"),
+        ):
+            match = regex.search(text)
+            if match:
+                value = match.group(1) or match.group(2)
+                if value:
+                    result[key] = value.strip()
+
+        # Clean text by removing all tags
+        clean_text = text
+        for regex in ALL_TAG_REGEXES:
+            clean_text = regex.sub("", clean_text)
+        result["clean_text"] = clean_text.strip()
+
+        return result
+
+    @staticmethod
     def extract_tags(text: str) -> Tuple[Optional[str], Optional[str], str]:
         """
-        Extract [action:xxx] and [emotion:xxx] tags from model output.
-        Returns: (action, emotion, clean_text)
+        Backward-compatible wrapper: returns (action, emotion, clean_text).
         """
-        if not text:
-            return None, None, ""
-
-        action = None
-        emotion = None
-
-        # Search action tags
-        action_match = ACTION_TAG_REGEX.search(text)
-        if action_match:
-            action = action_match.group(1) or action_match.group(2)
-            if action:
-                action = action.strip()
-
-        # Search emotion tags
-        emotion_match = EMOTION_TAG_REGEX.search(text)
-        if emotion_match:
-            emotion = emotion_match.group(1) or emotion_match.group(2)
-            if emotion:
-                emotion = emotion.strip()
-
-        # Clean text by removing all action and emotion tags
-        clean_text = ACTION_TAG_REGEX.sub("", text)
-        clean_text = EMOTION_TAG_REGEX.sub("", clean_text)
-        clean_text = clean_text.strip()
-
-        return action, emotion, clean_text
+        tags = CompanionOrchestrator.extract_semantic_tags(text)
+        return tags["action"], tags["emotion"], tags["clean_text"]
 
     def process_dialogue(
         self,
@@ -244,12 +279,16 @@ class CompanionOrchestrator:
         """
         Synchronously process a dialogue turn:
         1. Check visual intent and optionally capture frame via camera.
-        2. Call VLM / LLM with conversation history.
-        3. Parse action and emotion tags.
-        4. Update conversation context.
-        5. Dispatch TTS and physical expression via EventBus.
+        2. Append the recent sensor context digest to the LLM prompt.
+        3. Call VLM / LLM with conversation history.
+        4. Parse action / emotion / sound / owner_emotion tags.
+        5. Update conversation context.
+        6. Dispatch physical expression + dog voice via EventBus.
+           In builtin voice mode (mute dog) no TTS is synthesized; the dog
+           "speaks" only through built-in sound effects.
 
-        Returns result dict with raw_response, clean_text, action, emotion, etc.
+        Returns result dict with raw_response, clean_text, action, emotion,
+        sound, owner_emotion, etc.
         """
         if not prompt or not prompt.strip():
             return {"error": "Empty prompt", "success": False}
@@ -267,17 +306,23 @@ class CompanionOrchestrator:
             except Exception as e:
                 logger.warning(f"Failed to capture frame from camera: {e}")
 
-        # 2. Add user prompt to context
+        # 2. Build the LLM-facing prompt: user utterance + sensor context digest
+        llm_prompt = prompt
+        context_digest = self.sensor_context.summary() if self.sensor_context else ""
+        if context_digest:
+            llm_prompt = f"{prompt}\n\n{context_digest}"
+
+        # 3. Add user prompt to context
         self.context.add_user_message(prompt)
 
-        # 3. Call VLM / LLM
+        # 4. Call VLM / LLM
         raw_response = ""
         if self.vlm and self.vlm.is_available():
             try:
                 # Provide history excluding the prompt we just added to avoid duplicate prompt
                 history = self.context.get_history()[:-1]
                 raw_response = self.vlm.generate(
-                    prompt=prompt,
+                    prompt=llm_prompt,
                     image_data=final_image,
                     history=history,
                     system_prompt=self.context.system_prompt
@@ -287,36 +332,53 @@ class CompanionOrchestrator:
                 raw_response = "汪汪！"
         else:
             logger.warning("VLM not available, using default fallback response.")
-            raw_response = "[emotion:happy][action:wag_tail] 汪汪！"
+            raw_response = "[emotion:happy][action:wag_tail][sound:happy_bark] 汪汪！"
 
-        # 4. Extract action and emotion tags
-        action, emotion, clean_text = self.extract_tags(raw_response)
+        # 5. Extract semantic tags
+        tags = self.extract_semantic_tags(raw_response)
+        action = tags["action"]
+        emotion = tags["emotion"]
+        sound = tags["sound"]
+        owner_emotion = tags["owner_emotion"]
+        clean_text = tags["clean_text"]
 
-        # 5. Record assistant response in context
+        # 6. Record assistant response in context
         self.context.add_assistant_message(raw_response)
 
-        # 6. Dispatch TTS and Physical actuation
-        # Publish dialogue response event
+        # 7. Dispatch physical express + dog voice
         result = {
             "prompt": prompt,
             "raw_response": raw_response,
             "clean_text": clean_text,
             "action": action,
             "emotion": emotion or "neutral",
+            "sound": sound,
+            "owner_emotion": owner_emotion,
             "has_image": final_image is not None,
             "success": True,
         }
         self.bus.publish("dialogue.response", result)
 
-        # Dispatch physical express
+        # Approach intent: turn & walk toward the sound source instead of a pose
+        approach_angle = None
+        if action and action.lower() in APPROACH_ACTIONS:
+            approach_angle = self.sensor_context.last_sound_direction if self.sensor_context else None
+
         express_payload = {
             "emotion": emotion or "neutral",
-            "action": action,
+            # Approach handled by ApproachBehavior: no pose action, just motion
+            "action": None if approach_angle is not None else action,
+            "sound": sound,
         }
         self.bus.publish("actuator.express", express_payload)
 
-        # Synthesize and speak via TTS if available
-        if clean_text and self.tts and self.tts.is_available():
+        if approach_angle is not None:
+            self.bus.publish("behavior.approach", {"angle": approach_angle, "prompt": prompt})
+
+        # 8. Voice output: TTS only in 'tts' voice mode; the mute dog uses
+        #    built-in sounds only (clean_text is logged for debugging).
+        voice_mode = getattr(self.config, "voice_mode", "builtin")
+        if clean_text and voice_mode == "tts" and self.tts and self.tts.is_available():
             try:
                 audio_bytes = self.tts.synthesize(clean_text)
                 if audio_bytes:
@@ -326,5 +388,7 @@ class CompanionOrchestrator:
                     })
             except Exception as e:
                 logger.error(f"TTS synthesis error: {e}")
+        elif clean_text:
+            logger.info(f"[Mute dog inner voice] {clean_text}")
 
         return result
