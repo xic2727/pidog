@@ -8,6 +8,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -313,6 +314,7 @@ class PiDogController:
         self.voice_pid = None
         self.should_stop = False
         self.server = None
+        self.lock = threading.Lock()
 
     def close(self):
         self.runtime.close()
@@ -558,38 +560,41 @@ class PiDogController:
         self.request_count += 1
         if cmd == "ping":
             return self.status()
-        if cmd == "action":
-            if self.voice_mode:
-                raise RuntimeError("VOICE_MODE_ACTIVE: actions are paused while voice mode is on")
-            return self.action(req["name"], speed=req.get("speed", 60), hold=req.get("hold", False))
-        if cmd == "light":
-            if self.voice_mode:
-                raise RuntimeError("VOICE_MODE_ACTIVE: lights are paused while voice mode is on")
-            return self.light(
-                req["mode"],
-                tuple(req.get("color", COLOR_MAP["white"])),
-                bps=req.get("bps"),
-                brightness=req.get("brightness"),
-            )
-        if cmd == "head":
-            return self.head(
-                yaw=req.get("yaw"), roll=req.get("roll"), pitch=req.get("pitch"),
-                speed=req.get("speed", 50),
-            )
-        if cmd == "head_home":
-            return self.head_home(speed=req.get("speed", 50))
-        if cmd == "head_nudge":
-            return self.head_nudge(
-                axis=req["axis"], delta=req.get("delta", 10),
-                speed=req.get("speed", 50),
-            )
-        if cmd == "voice":
-            return self.voice_set(bool(req.get("on", False)))
-        if cmd == "stop":
-            return self.stop(scope=req.get("scope", "legs"))
-        if cmd == "shutdown":
-            return self.shutdown()
-        raise RuntimeError(f"unknown controller command: {cmd}")
+
+        # Non-ping commands acquire hardware lock to prevent thread/servo conflict
+        with self.lock:
+            if cmd == "action":
+                if self.voice_mode:
+                    raise RuntimeError("VOICE_MODE_ACTIVE: actions are paused while voice mode is on")
+                return self.action(req["name"], speed=req.get("speed", 60), hold=req.get("hold", False))
+            if cmd == "light":
+                if self.voice_mode:
+                    raise RuntimeError("VOICE_MODE_ACTIVE: lights are paused while voice mode is on")
+                return self.light(
+                    req["mode"],
+                    tuple(req.get("color", COLOR_MAP["white"])),
+                    bps=req.get("bps"),
+                    brightness=req.get("brightness"),
+                )
+            if cmd == "head":
+                return self.head(
+                    yaw=req.get("yaw"), roll=req.get("roll"), pitch=req.get("pitch"),
+                    speed=req.get("speed", 50),
+                )
+            if cmd == "head_home":
+                return self.head_home(speed=req.get("speed", 50))
+            if cmd == "head_nudge":
+                return self.head_nudge(
+                    axis=req["axis"], delta=req.get("delta", 10),
+                    speed=req.get("speed", 50),
+                )
+            if cmd == "voice":
+                return self.voice_set(bool(req.get("on", False)))
+            if cmd == "stop":
+                return self.stop(scope=req.get("scope", "legs"))
+            if cmd == "shutdown":
+                return self.shutdown()
+            raise RuntimeError(f"unknown controller command: {cmd}")
 
     def serve(self):
         ensure_state_dir()
@@ -607,6 +612,19 @@ class PiDogController:
         signal.signal(signal.SIGTERM, _handle_signal)
         signal.signal(signal.SIGINT, _handle_signal)
 
+        def _handle_client(conn):
+            with conn:
+                try:
+                    raw = conn.recv(65536)
+                    req = json.loads(raw.decode("utf-8"))
+                    resp = {"ok": True, "data": json_ready(self.handle(req))}
+                except Exception as exc:
+                    resp = {"ok": False, "error": str(exc)}
+                try:
+                    conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                except Exception:
+                    pass
+
         while not self.should_stop:
             try:
                 self.server.settimeout(1.0)
@@ -615,14 +633,7 @@ class PiDogController:
                 continue
             except OSError:
                 break
-            with conn:
-                try:
-                    raw = conn.recv(65536)
-                    req = json.loads(raw.decode("utf-8"))
-                    resp = {"ok": True, "data": json_ready(self.handle(req))}
-                except Exception as exc:
-                    resp = {"ok": False, "error": str(exc)}
-                conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+            threading.Thread(target=_handle_client, args=(conn,), daemon=True).start()
         self.close()
 
 
