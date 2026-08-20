@@ -1,0 +1,439 @@
+/* PiDog Local Web Console — landscape controller layout (fluid)
+ * All sizes derive from viewport-relative clamps so the UI works on
+ * anything from a 320px-wide phone to a 1200px tablet in landscape.
+ *
+ * Layout:  [ head-pad |  video  | squares + circles ]
+ *           [ move-pad | status  |  (statusbar)     ]
+ *           [--- bottombar: status | voice switch ---]
+ *
+ * The base unit `var(--u)` is a clamp() that scales smoothly with the
+ * viewport. Every padding/gap/radius/font-size is a multiple of `--u`.
+ * On top of that, the D-pad and the right-column grids use container
+ * queries so they adjust independently of the page-level size.
+ */
+
+* { box-sizing: border-box; }
+
+:root {
+  /* Base unit: 4–8 px depending on viewport.  Reused by every other size. */
+  --u:        clamp(4px, 0.55vw + 0.25rem, 8px);
+  --u-tight:  calc(var(--u) * 0.6);
+  --u-wide:   calc(var(--u) * 1.4);
+
+  /* Colors */
+  --bg:        #0f1115;
+  --bg-2:      #161a22;
+  --bg-3:      #1d2330;
+  --fg:        #e8eaf0;
+  --fg-dim:    #9aa3b2;
+  --primary:   #00d4ff;
+  --primary-d: #0099bb;
+  --danger:    #ff5a5a;
+  --ok:        #4ade80;
+  --line:      #2a3142;
+
+  /* Static-ish shapes */
+  --radius:    calc(var(--u) * 1.25);
+  --radius-lg: calc(var(--u) * 1.75);
+
+  /* Safe areas (iOS notch, Android gesture bar) */
+  --safe-top:    env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left:   env(safe-area-inset-left, 0px);
+  --safe-right:  env(safe-area-inset-right, 0px);
+}
+
+html, body {
+  margin: 0; padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+               "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: clamp(13px, 1vw + 0.6rem, 16px);   /* 13..16 */
+  line-height: 1.4;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow: hidden;
+}
+
+button { font: inherit; cursor: pointer; touch-action: manipulation; user-select: none; }
+
+/* Make every column a "container" so children can use cqw / cqh units. */
+.col-left, .col-center, .col-right {
+  container-type: inline-size;
+  container-name: col;
+}
+
+/* === Top bar ============================================================== */
+.topbar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+  display: flex; justify-content: space-between; align-items: center;
+  gap: var(--u);
+  padding: calc(var(--u-tight) + var(--safe-top)) calc(var(--u) + var(--safe-right))
+           var(--u-tight) calc(var(--u) + var(--safe-left));
+  background: rgba(15, 17, 21, 0.92);
+  backdrop-filter: saturate(140%) blur(10px);
+  -webkit-backdrop-filter: saturate(140%) blur(10px);
+  border-bottom: 1px solid var(--line);
+  height: calc(var(--u) * 4.5 + var(--safe-top));  /* ~ 18-36 px content + safe */
+  font-size: var(--u);
+}
+.topbar-left, .topbar-right { display: flex; align-items: center; gap: var(--u); }
+.logo  { font-size: calc(var(--u) * 1.2); }
+.title { font-weight: 600; letter-spacing: 0.05em; font-size: calc(var(--u) * 1.1); }
+.dot   { width: calc(var(--u) * 0.7); height: calc(var(--u) * 0.7); border-radius: 50%; display: inline-block; }
+.dot-on  { background: var(--ok);   box-shadow: 0 0 6px var(--ok); }
+.dot-off { background: var(--danger); }
+.conn-text { color: var(--fg-dim); font-size: calc(var(--u) * 0.9); min-width: 3em; }
+
+/* === Main 3-column layout ================================================= */
+#app {
+  position: fixed;
+  top:    calc(var(--u) * 4.5 + var(--safe-top));
+  bottom: calc(var(--u) * 5 + var(--safe-bottom));
+  left:   0; right: 0;
+  padding: var(--u-tight);
+  display: grid;
+  gap: var(--u-tight);
+  /* minmax(0, …) so columns can shrink below content size; the ratio gives
+     the center column priority while still keeping the sides visible. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2.6fr) minmax(0, 1fr);
+  grid-template-areas: "left center right";
+}
+
+.col-left   { grid-area: left;   display: grid; grid-template-rows: 1fr 1fr; gap: var(--u-tight); min-width: 0; min-height: 0; }
+.col-center { grid-area: center; display: grid; grid-template-rows: 1fr auto; gap: var(--u-tight); min-width: 0; min-height: 0; }
+.col-right  { grid-area: right;  display: grid; grid-template-rows: 1fr 1fr; gap: var(--u-tight); min-width: 0; min-height: 0; }
+
+/* === Left: D-pads ========================================================= */
+.dpad-wrap {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: calc(var(--u) * 0.4);
+  align-items: center;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--u-tight);
+  min-height: 0; min-width: 0;
+}
+.dpad-label {
+  font-size: calc(var(--u) * 0.85);
+  color: var(--fg-dim);
+  text-align: center;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+}
+.dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows:    repeat(3, 1fr);
+  gap: calc(var(--u) * 0.3);
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  max-height: 100%;
+  align-self: center;
+  justify-self: center;
+  min-height: 0; min-width: 0;
+}
+.dpad-cell { background: transparent; min-width: 0; min-height: 0; }
+.dpad-center {
+  background: var(--bg-3);
+  border: 1px dashed var(--line);
+  border-radius: calc(var(--u) * 0.8);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--fg-dim);
+  font-size: calc(var(--u) * 0.85);
+}
+.dpad-btn {
+  /* Fill the cell; size is dictated by the cell which is dictated by the
+     column width and the aspect-ratio of the dpad container. */
+  width: 100%; height: 100%;
+  border: 1px solid var(--line);
+  background: var(--bg-3);
+  color: var(--fg);
+  border-radius: calc(var(--u) * 0.8);
+  font-size: calc(var(--u) * 1.4);     /* icons scale with --u */
+  display: flex; align-items: center; justify-content: center;
+  transition: background 80ms, transform 60ms;
+  padding: 0;
+  min-width: 0; min-height: 0;
+}
+.dpad-btn:active,
+.dpad-btn.pressing { background: var(--primary); color: #001520; transform: scale(0.94); }
+.dpad-btn.primary { background: #1f3340; border-color: #28485a; }
+.dpad-btn.primary:active,
+.dpad-btn.primary.pressing { background: var(--primary); color: #001520; }
+.dpad-coord {
+  text-align: center;
+  font-size: calc(var(--u) * 0.7);
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* === Center: video + status =============================================== */
+.video {
+  position: relative;
+  width: 100%; height: 100%;
+  min-height: 0; min-width: 0;
+  background: #000;
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+.video img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.video-fallback {
+  position: absolute; inset: 0;
+  display: none; align-items: center; justify-content: center;
+  flex-direction: column; gap: calc(var(--u) * 0.5);
+  color: var(--fg-dim); background: var(--bg-2);
+  text-align: center; padding: var(--u);
+  font-size: var(--u);
+}
+.video-fallback code { color: var(--fg); }
+.video.no-stream .video-fallback { display: flex; }
+.video.no-stream img { display: none; }
+
+.statusbar {
+  display: flex; gap: var(--u); flex-wrap: wrap;
+  padding: calc(var(--u) * 0.6) var(--u);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: calc(var(--u) * 0.85);
+  color: var(--fg-dim);
+}
+.statusbar b { color: var(--fg); margin-left: calc(var(--u) * 0.3); font-variant-numeric: tabular-nums; }
+
+/* === Right: square actions + round functions ============================== */
+.right-block {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: calc(var(--u) * 0.4);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--u-tight);
+  min-height: 0; min-width: 0;
+}
+.right-label {
+  font-size: calc(var(--u) * 0.85);
+  color: var(--fg-dim);
+  text-align: center;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+}
+.square-grid {
+  --n: 3;                                  /* 3x3 grid for custom actions */
+  display: grid; gap: calc(var(--u) * 0.4);
+  grid-template-columns: repeat(var(--n), 1fr);
+  grid-template-rows:    repeat(var(--n), 1fr);
+  min-height: 0; min-width: 0;
+  container-type: size;
+}
+.sq {
+  width: 100%; height: 100%;
+  border: 1px solid var(--line);
+  background: var(--bg-3);
+  color: var(--fg);
+  border-radius: calc(var(--u) * 0.7);     /* 偏方形: 圆角小 */
+  font-size: calc(var(--u) * 0.95);
+  font-weight: 500;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 80ms, transform 60ms, border-color 80ms;
+  padding: calc(var(--u) * 0.3);
+  min-width: 0; min-height: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sq:hover  { background: #232a3a; }
+.sq:active { transform: scale(0.96); background: #2c3447; }
+.sq.holding { background: var(--primary); color: #001520; border-color: var(--primary-d); }
+
+.round-grid {
+  --n: 2;                                  /* grid side count (2x2) */
+  display: grid; gap: calc(var(--u) * 0.5);
+  grid-template-columns: repeat(var(--n), 1fr);
+  grid-template-rows:    repeat(var(--n), 1fr);
+  min-height: 0; min-width: 0;
+  /* `size` so cqw + cqh are both available; we divide by --n to get
+     the per-cell dimension. */
+  container-type: size;
+}
+.rd {
+  /* True circle: take the smaller of (cell width, cell height) by
+     dividing the grid's cqw/cqh by --n, then let aspect-ratio make the
+     other dimension follow. */
+  width: min(calc(100cqw / var(--n)), calc(100cqh / var(--n)));
+  aspect-ratio: 1 / 1;
+  place-self: center;
+  border: 1px solid var(--line);
+  background: var(--bg-3);
+  color: var(--fg);
+  border-radius: 50%;                     /* 圆 */
+  font-size: calc(var(--u) * 0.85);
+  display: flex; align-items: center; justify-content: center;
+  transition: background 80ms, transform 60ms, border-color 80ms;
+  padding: calc(var(--u) * 0.4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rd:hover  { background: #232a3a; }
+.rd:active { transform: scale(0.94); background: #2c3447; }
+.rd.holding { background: var(--primary); color: #001520; border-color: var(--primary-d); }
+
+/* === Container queries: fine-tune when columns get too narrow ============ */
+/* When left column is below 130px (~360px viewport), shrink icon font. */
+@container col (max-width: 130px) {
+  .dpad-btn   { font-size: calc(var(--u) * 1.2); }
+  .sq, .rd    { font-size: calc(var(--u) * 0.8); }
+  .dpad-center{ font-size: calc(var(--u) * 0.7); }
+}
+/* When the right column drops below 110px (very narrow phones), abbreviate
+   the round buttons — the labels are shorter so they fit. */
+@container col (max-width: 110px) {
+  .rd { font-size: calc(var(--u) * 0.7); }
+}
+
+/* === Bottom bar: voice switch ============================================= */
+.bottombar {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
+  display: flex; justify-content: space-between; align-items: center;
+  gap: var(--u);
+  padding: var(--u-tight) calc(var(--u) + var(--safe-right))
+           calc(var(--u-tight) + var(--safe-bottom)) calc(var(--u) + var(--safe-left));
+  background: rgba(15, 17, 21, 0.95);
+  backdrop-filter: saturate(140%) blur(8px);
+  -webkit-backdrop-filter: saturate(140%) blur(8px);
+  border-top: 1px solid var(--line);
+  height: calc(var(--u) * 5 + var(--safe-bottom));
+  font-size: var(--u);
+}
+.bb-left { display: flex; align-items: center; gap: calc(var(--u) * 0.8); min-width: 0; }
+.muted {
+  color: var(--fg-dim);
+  font-size: calc(var(--u) * 0.85);
+  min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* pill */
+.pill {
+  display: inline-block;
+  padding: calc(var(--u) * 0.3) calc(var(--u) * 0.8);
+  border-radius: 999px;
+  font-size: calc(var(--u) * 0.8);
+  font-weight: 600;
+  border: 1px solid var(--line);
+  white-space: nowrap;
+}
+.pill-off { color: var(--fg-dim); background: var(--bg-3); }
+.pill-on  { color: var(--bg);     background: var(--primary); border-color: var(--primary-d); }
+
+/* switch */
+.switch {
+  display: flex; align-items: center; gap: calc(var(--u) * 0.7);
+  cursor: pointer;
+  padding: calc(var(--u) * 0.4) calc(var(--u) * 0.6);
+  border-radius: calc(var(--u) * 0.7);
+  -webkit-tap-highlight-color: transparent;
+  font-size: var(--u);
+}
+.switch:active { background: var(--bg-2); }
+.switch-label { font-size: calc(var(--u) * 0.95); color: var(--fg); white-space: nowrap; }
+.switch input { position: absolute; opacity: 0; pointer-events: none; }
+.switch-track {
+  display: inline-block;
+  position: relative;
+  width:  calc(var(--u) * 5.5);
+  height: calc(var(--u) * 3);
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  transition: background 120ms, border-color 120ms;
+  flex-shrink: 0;
+}
+.switch-thumb {
+  position: absolute;
+  top: calc(var(--u) * 0.2);
+  left: calc(var(--u) * 0.2);
+  width:  calc(var(--u) * 2.4);
+  height: calc(var(--u) * 2.4);
+  background: var(--fg-dim);
+  border-radius: 50%;
+  transition: transform 140ms cubic-bezier(.4,1.4,.6,1), background 120ms;
+}
+.switch input:checked ~ .switch-track { background: var(--primary); border-color: var(--primary-d); }
+.switch input:checked ~ .switch-track .switch-thumb {
+  transform: translateX(calc(var(--u) * 2.6));
+  background: #001520;
+}
+.switch input:disabled ~ .switch-track { opacity: 0.5; }
+
+/* === Misc buttons in top bar ============================================== */
+.ghost {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--fg);
+  border-radius: calc(var(--u) * 0.7);
+  padding: calc(var(--u) * 0.4) calc(var(--u) * 0.7);
+  font-size: calc(var(--u) * 0.85);
+  white-space: nowrap;
+}
+.ghost:active { background: var(--bg-2); }
+.danger {
+  background: #3b1d22; color: var(--danger); border: 1px solid #5a2a30;
+  border-radius: calc(var(--u) * 0.7);
+  padding: calc(var(--u) * 0.4) calc(var(--u) * 0.7);
+  font-size: calc(var(--u) * 0.85);
+  white-space: nowrap;
+}
+.danger:active { background: #4a2429; }
+.wide  { width: 100%; }
+.small { /* keep but size comes from font-size */ }
+
+/* === Toast ================================================================ */
+.toast {
+  position: fixed; left: 50%; bottom: calc(var(--u) * 6 + var(--safe-bottom));
+  transform: translateX(-50%) translateY(20px);
+  padding: calc(var(--u) * 0.7) calc(var(--u) * 1.2);
+  min-width: calc(var(--u) * 14); max-width: 90vw;
+  background: rgba(20, 24, 33, 0.95); color: var(--fg);
+  border: 1px solid var(--line); border-radius: calc(var(--u) * 0.9);
+  font-size: calc(var(--u) * 0.9);
+  text-align: center;
+  opacity: 0; pointer-events: none;
+  transition: opacity 160ms, transform 160ms;
+  z-index: 30;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.err  { border-color: var(--danger); }
+.toast.ok   { border-color: var(--ok); }
+
+/* === Portrait: stacked, scrollable ======================================= */
+@media (orientation: portrait) {
+  html, body { overflow: auto; }
+  #app {
+    grid-template-columns: 1fr;
+    grid-template-rows: 32vh auto auto;
+    grid-template-areas: "center" "left" "right";
+    overflow-y: auto;
+  }
+  .col-left, .col-right {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr;
+  }
+}
+
+/* === prefers-reduced-motion ============================================== */
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}

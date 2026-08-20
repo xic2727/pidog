@@ -1,0 +1,31 @@
+# PiDog Local Web Console — default configuration
+# Override individual values via environment variables, e.g.:
+#   PIDOG_WEB_PORT=9000 python3 web_server.py
+
+[server]
+host = "0.0.0.0"
+port = 8000
+log_level = "info"     # critical | error | warning | info | debug
+
+[daemon]
+# Unix-socket path of the upstream pidog-control daemon
+socket = "~/.openclaw/pidog-control/controller.sock"
+# Timeouts (seconds) for daemon round-trips
+request_timeout = 5.0
+long_timeout    = 15.0
+
+[status]
+# How often the WebSocket poller pings the daemon (ms)
+ws_push_interval_ms = 1000
+
+[camera]
+# The SPA uses {host} as a placeholder for window.location.hostname
+direct_mjpeg_url = "http://{host}:9000/mjpg"
+# Proxy mode (v1.1) — leave false in v1
+proxy_enabled = false
+
+[mdns]
+# mDNS hostname advertised by avahi-daemon
+hostname = "pidog.local"
+# Set false to skip the mDNS probe (LAN IP only)
+enabled  = true

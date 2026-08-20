@@ -42,10 +42,25 @@ ACTION_MAP = {
     "sit": "sit",
     "lie": "lie",
     "wag-tail": "wag_tail",
+    "bark": "bark",                   # special-cased in action() via speak()
+    "pant": "pant",                   # compound
+    "stretch": "stretch",             # compound
+    "push-up": "push_up",             # compound
     "forward": "forward",
     "backward": "backward",
     "turn-left": "turn_left",
     "turn-right": "turn_right",
+}
+
+# Compound actions: functions in `pidog.preset_actions` taking (my_dog, …).
+# The daemon calls them with just the runtime dog; each function's optional
+# yrp / pitch_comp args are left at their defaults.
+COMPOUND_ACTIONS = {
+    "hand-shake":     "hand_shake",
+    "high-five":      "high_five",
+    "scratch":        "scratch",
+    "howling":        "howling",
+    "body-twisting":  "body_twisting",
 }
 
 DEFAULT_BARK_SOUND = "single_bark_1"
@@ -292,6 +307,10 @@ class PiDogController:
         self.current_posture = None
         self.last_action = None
         self.last_light = None
+        self.last_head = None
+        self.head_state = [0, 0, 0]   # [yaw, roll, pitch] last sent to hardware
+        self.voice_mode = False
+        self.voice_pid = None
         self.should_stop = False
         self.server = None
 
@@ -319,6 +338,27 @@ class PiDogController:
                 raise RuntimeError(f"PiDog sound '{DEFAULT_BARK_SOUND}' was not found in the installed sounds directory")
             self.last_action = {"name": name, "speed": speed, "hold": hold, "sound": DEFAULT_BARK_SOUND}
             return {"message": f"action 'bark' ok via speak('{DEFAULT_BARK_SOUND}')"}
+
+        # Compound actions: call the function from pidog.preset_actions
+        # with the runtime dog instance. The functions accept optional yrp
+        # / pitch_comp args which we leave at their defaults.
+        if name in COMPOUND_ACTIONS:
+            try:
+                import pidog.preset_actions as _pa
+            except Exception as exc:
+                raise RuntimeError(f"failed to import pidog.preset_actions: {exc}")
+            func = getattr(_pa, COMPOUND_ACTIONS[name], None)
+            if func is None:
+                raise RuntimeError(f"compound action '{name}' -> {COMPOUND_ACTIONS[name]} not found in pidog.preset_actions")
+            func(dog)
+            self.current_posture = name if hold and name in {"stand", "sit", "lie"} else None
+            self.last_action = {"name": name, "kind": "compound", "mapped": COMPOUND_ACTIONS[name], "speed": speed, "hold": hold}
+            return {
+                "message": f"compound action '{name}' ok via preset_actions.{COMPOUND_ACTIONS[name]}()",
+                "hold": hold,
+                "posture": self.current_posture,
+                "dispatched": True,
+            }
 
         action_name = ACTION_MAP[name]
         dog.do_action(action_name, speed=speed)
@@ -357,7 +397,136 @@ class PiDogController:
             data["note"] = "experimental mode mapped to tested 'boom' effect"
         return data
 
+    def stop(self, scope="legs"):
+        """Halt ongoing movement.
+
+        Used by the web UI's "press-and-hold" D-pad: while the user holds a
+        movement button, the client repeatedly fires the corresponding action;
+        when they release, the client calls this to halt the legs immediately
+        rather than waiting for the last action's natural completion.
+        """
+        dog = self._connect()
+        if scope == "body":
+            dog.body_stop()
+            msg = "body stopped (legs + head + tail)"
+        else:
+            dog.legs_stop()
+            msg = "legs stopped"
+        return {"message": msg, "scope": scope}
+
+    def head(self, yaw=None, roll=None, pitch=None, speed=50):
+        """Move head to absolute [yaw, roll, pitch] in degrees. None = keep current.
+
+        We track `self.head_state` so subsequent partial updates are incremental.
+        """
+        if self.voice_mode:
+            raise RuntimeError("VOICE_MODE_ACTIVE: actions are paused while voice mode is on")
+        if not -90 <= (yaw   or 0) <= 90:  raise RuntimeError("yaw out of range [-90, 90]")
+        if not -30 <= (roll  or 0) <= 30:  raise RuntimeError("roll out of range [-30, 30]")
+        if not -30 <= (pitch or 0) <= 30:  raise RuntimeError("pitch out of range [-30, 30]")
+        if yaw   is not None: self.head_state[0] = float(yaw)
+        if roll  is not None: self.head_state[1] = float(roll)
+        if pitch is not None: self.head_state[2] = float(pitch)
+        dog = self._connect()
+        dog.head_move([self.head_state], immediately=True, speed=speed)
+        self.last_head = {
+            "yaw": self.head_state[0],
+            "roll": self.head_state[1],
+            "pitch": self.head_state[2],
+            "speed": speed,
+        }
+        return {
+            "message": f"head moved to yaw={self.head_state[0]} roll={self.head_state[1]} pitch={self.head_state[2]}",
+            "yaw":   self.head_state[0],
+            "roll":  self.head_state[1],
+            "pitch": self.head_state[2],
+        }
+
+    def head_home(self, speed=50):
+        return self.head(yaw=0, roll=0, pitch=0, speed=speed)
+
+    def head_nudge(self, axis, delta, speed=50, max_abs=90):
+        """Relative head move (used by the D-pad). `axis` is 'yaw'|'roll'|'pitch'."""
+        idx = {"yaw": 0, "roll": 1, "pitch": 2}[axis]
+        new_val = max(-max_abs, min(max_abs, self.head_state[idx] + float(delta)))
+        kwargs = {"speed": speed, axis: new_val}
+        return self.head(**kwargs)
+
+    def voice_set(self, on: bool):
+        """Start/stop the voice companion subprocess (ASR + LLM + TTS).
+
+        When voice is ON, the daemon refuses hardware actions because the spawned
+        orchestrator owns the Pidog runtime. Turning voice OFF kills the subprocess
+        and re-enables normal control.
+
+        NOTE: this assumes the standard install layout under $HOME/pidog and looks
+        for `examples/21_embodied_pet_companion.py`. Override with env var
+        PIDOG_VOICE_SCRIPT.
+        """
+        # Reap any previous child if it has exited.
+        if self.voice_pid is not None:
+            if not pid_alive(self.voice_pid):
+                self.voice_pid = None
+                self.voice_mode = False
+        if bool(on) == self.voice_mode:
+            return {
+                "voice_mode": self.voice_mode,
+                "voice_pid":  self.voice_pid,
+                "changed":    False,
+                "message":    f"voice mode already {'on' if self.voice_mode else 'off'}",
+            }
+        if on:
+            script = os.environ.get(
+                "PIDOG_VOICE_SCRIPT",
+                str(Path.home() / "pidog" / "examples" / "21_embodied_pet_companion.py"),
+            )
+            if not os.path.isfile(script):
+                raise RuntimeError(f"voice script not found: {script}")
+            log_path = STATE_DIR / "voice.log"
+            log_fh = open(log_path, "ab", buffering=0)
+            proc = subprocess.Popen(
+                [sys.executable, script],
+                stdout=log_fh, stderr=subprocess.STDOUT,
+                cwd=str(Path(script).parent.parent),  # ~/pidog
+                env=os.environ.copy(),
+                start_new_session=True,
+            )
+            self.voice_pid = proc.pid
+            self.voice_mode = True
+            return {
+                "voice_mode": True,
+                "voice_pid":  proc.pid,
+                "changed":    True,
+                "message":    f"voice mode on (pid={proc.pid}, log={log_path})",
+            }
+        else:
+            pid = self.voice_pid
+            if pid is not None:
+                try:
+                    os.killpg(os.getpgid(pid), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                # Give it a moment, then SIGKILL if still alive.
+                for _ in range(20):
+                    if not pid_alive(pid): break
+                    time.sleep(0.1)
+                if pid_alive(pid):
+                    try: os.killpg(os.getpgid(pid), signal.SIGKILL)
+                    except ProcessLookupError: pass
+            self.voice_pid = None
+            self.voice_mode = False
+            return {
+                "voice_mode": False,
+                "voice_pid":  None,
+                "changed":    pid is not None,
+                "message":    f"voice mode off (was pid={pid})" if pid else "voice mode off",
+            }
+
     def status(self):
+        # If we spawned voice, reflect that it died in our state.
+        if self.voice_pid is not None and not pid_alive(self.voice_pid):
+            self.voice_pid = None
+            self.voice_mode = False
         return {
             "running": True,
             "pid": os.getpid(),
@@ -370,9 +539,17 @@ class PiDogController:
             "current_posture": self.current_posture,
             "last_action": self.last_action,
             "last_light": self.last_light,
+            "last_head": self.last_head,
+            "head_state": list(self.head_state),
+            "voice_mode": self.voice_mode,
+            "voice_pid": self.voice_pid,
         }
 
     def shutdown(self):
+        # If voice is on, kill it first so the orchestrator doesn't outlive us.
+        if self.voice_mode:
+            try: self.voice_set(False)
+            except Exception: pass
         self.should_stop = True
         return {"message": "shutdown requested"}
 
@@ -382,14 +559,34 @@ class PiDogController:
         if cmd == "ping":
             return self.status()
         if cmd == "action":
+            if self.voice_mode:
+                raise RuntimeError("VOICE_MODE_ACTIVE: actions are paused while voice mode is on")
             return self.action(req["name"], speed=req.get("speed", 60), hold=req.get("hold", False))
         if cmd == "light":
+            if self.voice_mode:
+                raise RuntimeError("VOICE_MODE_ACTIVE: lights are paused while voice mode is on")
             return self.light(
                 req["mode"],
                 tuple(req.get("color", COLOR_MAP["white"])),
                 bps=req.get("bps"),
                 brightness=req.get("brightness"),
             )
+        if cmd == "head":
+            return self.head(
+                yaw=req.get("yaw"), roll=req.get("roll"), pitch=req.get("pitch"),
+                speed=req.get("speed", 50),
+            )
+        if cmd == "head_home":
+            return self.head_home(speed=req.get("speed", 50))
+        if cmd == "head_nudge":
+            return self.head_nudge(
+                axis=req["axis"], delta=req.get("delta", 10),
+                speed=req.get("speed", 50),
+            )
+        if cmd == "voice":
+            return self.voice_set(bool(req.get("on", False)))
+        if cmd == "stop":
+            return self.stop(scope=req.get("scope", "legs"))
         if cmd == "shutdown":
             return self.shutdown()
         raise RuntimeError(f"unknown controller command: {cmd}")

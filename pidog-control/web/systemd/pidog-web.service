@@ -1,0 +1,23 @@
+[Unit]
+Description=PiDog Local Web Console
+Documentation=file://%h/pidog/docs/plans/local-web-console.md
+After=network-online.target avahi-daemon.service
+Wants=network-online.target avahi-daemon.service
+
+[Service]
+Type=simple
+User=pidog
+WorkingDirectory=/home/pidog/pidog/pidog-control
+ExecStart=/usr/bin/python3 -m web.web_server
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+# Hardening (tighten as you like; loosen if something breaks)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

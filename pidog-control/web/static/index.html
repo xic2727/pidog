@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#0f1115">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="PiDog">
+  <title>PiDog · 本地控制台</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='52' font-size='52'%3E%F0%9F%90%B6%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <!-- 顶栏: 标题 / 连接状态 / 兜底控制 -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo">🐶</span>
+      <span class="title">PiDog</span>
+      <span id="conn-dot" class="dot dot-off" title="daemon 状态"></span>
+      <span id="conn-text" class="conn-text">连接中…</span>
+    </div>
+    <div class="topbar-right">
+      <button id="btn-url"     class="ghost small" type="button" title="点复制本机 URL">URL</button>
+      <button id="btn-stop-all" class="danger small" type="button" title="停所有动作">停所有</button>
+    </div>
+  </header>
+
+  <!-- 主体: 横屏 3 栏布局 -->
+  <main id="app">
+    <!-- 左栏: 头部位姿 D-pad (上) + 身体移动 D-pad (下) -->
+    <section class="col col-left">
+      <div class="dpad-wrap">
+        <div class="dpad-label">头</div>
+        <div class="dpad" id="dpad-head">
+          <div class="dpad-cell"></div>
+          <button class="dpad-btn" data-nudge="pitch" data-delta="10" title="抬头">▲</button>
+          <div class="dpad-cell"></div>
+          <button class="dpad-btn" data-nudge="yaw" data-delta="-15" title="左转头">◀</button>
+          <div class="dpad-cell dpad-center">头</div>
+          <button class="dpad-btn" data-nudge="yaw" data-delta="15" title="右转头">▶</button>
+          <div class="dpad-cell"></div>
+          <button class="dpad-btn" data-nudge="pitch" data-delta="-10" title="低头">▼</button>
+          <div class="dpad-cell"></div>
+        </div>
+        <div class="dpad-coord" id="head-coord">Y 0°  P 0°</div>
+      </div>
+
+      <div class="dpad-wrap">
+        <div class="dpad-label">移</div>
+        <div class="dpad" id="dpad-move">
+          <div class="dpad-cell"></div>
+          <button class="dpad-btn primary" data-action="forward" title="前进">▲</button>
+          <div class="dpad-cell"></div>
+          <button class="dpad-btn primary" data-action="turn-left" title="左转">◀</button>
+          <div class="dpad-cell dpad-center">移</div>
+          <button class="dpad-btn primary" data-action="turn-right" title="右转">▶</button>
+          <div class="dpad-cell"></div>
+          <button class="dpad-btn primary" data-action="backward" title="后退">▼</button>
+          <div class="dpad-cell"></div>
+        </div>
+        <button id="btn-head-home" class="ghost small wide" type="button" title="头部回中">头回中</button>
+      </div>
+    </section>
+
+    <!-- 中栏: 摄像头实时画面 -->
+    <section class="col col-center">
+      <div class="video" id="video-section">
+        <img id="mjpeg" alt="PiDog 实时画面" decoding="async">
+        <div id="video-fallback" class="video-fallback">
+          <div class="big">视频不可用</div>
+          <small>请确认 vilib 已在 <code>http://&lt;pi-host&gt;:9000/mjpg</code> 启动</small>
+        </div>
+      </div>
+      <div class="statusbar">
+        <span>姿态 <b id="st-posture">—</b></span>
+        <span>头 <b id="st-head">0/0</b></span>
+        <span>灯 <b id="st-light">off</b></span>
+        <span>请求 <b id="st-count">0</b></span>
+      </div>
+    </section>
+
+    <!-- 右栏: 自定义动作 (上方方按钮) + 功能 (下方圆按钮) -->
+    <section class="col col-right">
+      <div class="right-block">
+        <div class="right-label">自定义动作</div>
+        <div class="square-grid" id="grid-squares">
+          <button class="sq" data-action="wag-tail"  title="摇尾巴">摇尾</button>
+          <button class="sq" data-action="bark"      title="叫">叫</button>
+          <button class="sq" data-action="pant"      title="喘气">喘气</button>
+          <button class="sq" data-action="stretch"   title="伸懒腰">伸懒</button>
+          <button class="sq" data-action="hand-shake" title="握手">握手</button>
+          <button class="sq" data-action="high-five"  title="击掌">击掌</button>
+          <button class="sq" data-action="push-up"    title="俯卧撑">撑</button>
+          <button class="sq" data-action="scratch"    title="挠痒">挠痒</button>
+          <button class="sq" data-action="howling"    title="嚎叫">嚎</button>
+        </div>
+      </div>
+      <div class="right-block">
+        <div class="right-label">功能</div>
+        <div class="round-grid" id="grid-circles">
+          <button class="rd" data-action="stand"         data-hold="1" title="站立 (hold)">站</button>
+          <button class="rd" data-action="sit"           data-hold="1" title="坐下 (hold)">坐</button>
+          <button class="rd" data-action="lie"           data-hold="1" title="趴下 (hold)">趴</button>
+          <button class="rd" data-action="body-twisting" title="扭身">扭</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- 底栏: 状态 / 语音模式开关 -->
+  <footer class="bottombar">
+    <div class="bb-left">
+      <span id="voice-status-pill" class="pill pill-off">语音 关</span>
+      <span class="muted" id="bb-msg">就绪</span>
+    </div>
+    <label class="switch" id="voice-switch" title="开启后由 ASR + LLM + TTS 控制机器狗">
+      <span class="switch-label">语音模式</span>
+      <input type="checkbox" id="voice-toggle" role="switch" aria-label="语音模式">
+      <span class="switch-track"><span class="switch-thumb"></span></span>
+    </label>
+  </footer>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

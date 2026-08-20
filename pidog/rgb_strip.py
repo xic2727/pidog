@@ -26,6 +26,7 @@ class RGBStrip():
         "bark",
         "speak",
         "listen",
+        "heartbeat",
     ]
 
     MIN_DELAY = 0.05
