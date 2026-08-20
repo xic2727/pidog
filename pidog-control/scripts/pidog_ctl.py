@@ -334,16 +334,30 @@ class PiDogController:
 
     def action(self, name, speed=60, hold=False):
         dog = self._connect()
+
+        # Helper to resolve absolute sound file paths so speak() never fails
+        def resolve_sound(sound_name):
+            candidates = [
+                Path.home() / "pidog" / "sounds" / f"{sound_name}.mp3",
+                Path.home() / "pidog" / "sounds" / f"{sound_name}.wav",
+                Path(__file__).resolve().parents[2] / "sounds" / f"{sound_name}.mp3",
+                Path(__file__).resolve().parents[2] / "sounds" / f"{sound_name}.wav",
+            ]
+            for cand in candidates:
+                if cand.is_file():
+                    return str(cand)
+            return sound_name
+
         if name == "bark":
-            result = dog.speak(DEFAULT_BARK_SOUND)
+            sound_target = resolve_sound(DEFAULT_BARK_SOUND)
+            result = dog.speak(sound_target)
             if result is False:
                 raise RuntimeError(f"PiDog sound '{DEFAULT_BARK_SOUND}' was not found in the installed sounds directory")
             self.last_action = {"name": name, "speed": speed, "hold": hold, "sound": DEFAULT_BARK_SOUND}
             return {"message": f"action 'bark' ok via speak('{DEFAULT_BARK_SOUND}')"}
 
         # Compound actions: call the function from pidog.preset_actions
-        # with the runtime dog instance. The functions accept optional yrp
-        # / pitch_comp args which we leave at their defaults.
+        # with the runtime dog instance. Monkey patch speak if needed to resolve absolute paths.
         if name in COMPOUND_ACTIONS:
             try:
                 import pidog.preset_actions as _pa
@@ -352,7 +366,17 @@ class PiDogController:
             func = getattr(_pa, COMPOUND_ACTIONS[name], None)
             if func is None:
                 raise RuntimeError(f"compound action '{name}' -> {COMPOUND_ACTIONS[name]} not found in pidog.preset_actions")
-            func(dog)
+
+            # Patch speak temporarily to ensure sound files are found
+            orig_speak = dog.speak
+            def patched_speak(sound_name, volume=100):
+                return orig_speak(resolve_sound(sound_name), volume)
+            dog.speak = patched_speak
+            try:
+                func(dog)
+            finally:
+                dog.speak = orig_speak
+
             self.current_posture = name if hold and name in {"stand", "sit", "lie"} else None
             self.last_action = {"name": name, "kind": "compound", "mapped": COMPOUND_ACTIONS[name], "speed": speed, "hold": hold}
             return {

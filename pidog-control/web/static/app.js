@@ -115,6 +115,7 @@
     for (const btn of buttons) {
       const name = btn.dataset.action;
       let timer = null;
+      let isLongPress = false;
 
       const fire = async () => {
         if (state.inflight.has(name)) return;        // skip overlapping calls
@@ -126,9 +127,6 @@
             body: JSON.stringify({ name, speed: 70, hold: false }),
           });
         } catch (e) {
-          // Voice mode is the only "hard" stop: the action will never
-          // succeed while voice is on.  Other errors (DAEMON_DOWN, …) we
-          // keep retrying — the user can release to stop the loop.
           if (e.code === 'VOICE_MODE_ACTIVE') {
             if (timer) { clearInterval(timer); timer = null; }
             btn.classList.remove('pressing');
@@ -148,18 +146,23 @@
           try { btn.setPointerCapture(e.pointerId); } catch {}
         }
         btn.classList.add('pressing');
+        isLongPress = false;
         fire();                                          // immediate first call
-        timer = setInterval(fire, 600);                 // then every 600 ms to match gait cycle
+        timer = setInterval(() => {
+          isLongPress = true;
+          fire();
+        }, 800);                                        // 800 ms per gait cycle
       };
 
       const onUp = async (e) => {
         e.preventDefault();
         if (timer) { clearInterval(timer); timer = null; }
         btn.classList.remove('pressing');
-        // Always send a stop on release — it's idempotent and cheap, and
-        // makes sure any in-flight movement is halted.
-        try { await api('/api/stop', { method: 'POST' }); }
-        catch { /* swallow — best effort */ }
+        // Only send stop if it was a long press hold; single click allows action to finish naturally
+        if (isLongPress) {
+          try { await api('/api/stop', { method: 'POST' }); }
+          catch { /* swallow — best effort */ }
+        }
       };
 
       btn.addEventListener('pointerdown',   onDown);

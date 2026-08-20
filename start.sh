@@ -77,14 +77,17 @@ stop_services() {
     fi
     pkill -f "web_server.py" 2>/dev/null || true
 
-    # 2. 停止摄像头服务
+    # 2. 停止摄像头服务 (优先 SIGINT 让 picamera2/vilib 释放设备句柄)
     echo "[2/3] 停止摄像头推流服务..."
     if [ -f "$CAMERA_PID_FILE" ]; then
         PID=$(cat "$CAMERA_PID_FILE")
-        kill "$PID" 2>/dev/null || true
+        kill -SIGINT "$PID" 2>/dev/null || true
         rm -f "$CAMERA_PID_FILE"
     fi
-    pkill -f "vilib.camera_start" 2>/dev/null || true
+    pkill -SIGINT -f "vilib.camera_start" 2>/dev/null || true
+    sleep 2
+    # 强制清理确保无残留句柄
+    pkill -9 -f "vilib.camera_start" 2>/dev/null || true
 
     # 3. 停止 Daemon 控制进程
     echo "[3/3] 停止硬件控制守护进程..."
