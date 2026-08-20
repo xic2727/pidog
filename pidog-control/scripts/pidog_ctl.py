@@ -43,7 +43,6 @@ ACTION_MAP = {
     "lie": "lie",
     "wag-tail": "wag_tail",
     "bark": "bark",                   # special-cased in action() via speak()
-    "pant": "pant",                   # compound
     "stretch": "stretch",             # compound
     "push-up": "push_up",             # compound
     "forward": "forward",
@@ -56,6 +55,7 @@ ACTION_MAP = {
 # The daemon calls them with just the runtime dog; each function's optional
 # yrp / pitch_comp args are left at their defaults.
 COMPOUND_ACTIONS = {
+    "pant":           "pant",
     "hand-shake":     "hand_shake",
     "high-five":      "high_five",
     "scratch":        "scratch",

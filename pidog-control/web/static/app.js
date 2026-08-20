@@ -149,7 +149,7 @@
         }
         btn.classList.add('pressing');
         fire();                                          // immediate first call
-        timer = setInterval(fire, 100);                 // then every 100 ms
+        timer = setInterval(fire, 600);                 // then every 600 ms to match gait cycle
       };
 
       const onUp = async (e) => {

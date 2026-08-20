@@ -58,7 +58,15 @@ html, body {
   overflow: hidden;
 }
 
-button { font: inherit; cursor: pointer; touch-action: manipulation; user-select: none; }
+button, .sq, .dpad-btn, .circle-btn {
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+}
 
 /* Make every column a "container" so children can use cqw / cqh units. */
 .col-left, .col-center, .col-right {
