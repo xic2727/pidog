@@ -22,6 +22,11 @@ class ActionRequest(BaseModel):
     hold: bool = Field(False, description="If true, keep the posture until released")
 
 
+class MoveRequest(BaseModel):
+    name: str = Field(..., description="Move action name (forward, backward, turn-left, turn-right)")
+    speed: int = Field(98, ge=1, le=100, description="Movement speed 1..100, default 98")
+
+
 class ReleaseRequest(BaseModel):
     name: str = Field(..., description="Action name to release (must be a hold posture)")
 
@@ -40,6 +45,16 @@ async def post_action(req: ActionRequest, request: Request) -> dict:
         # If this is a new hold, also stop any previous hold (matches pidog-control UX).
         if is_hold and req.name in {"stand", "sit", "lie"}:
             asyncio.create_task(_stop_previous_hold(req.name))
+        return {"ok": True, "data": data}
+    except DaemonError as exc:
+        raise HTTPException(status_code=_http_status_for(exc.code), detail=exc.to_dict())
+
+
+@router.post("/move", summary="Start continuous movement worker (forward, backward, turn-left, turn-right)")
+async def post_move(req: MoveRequest, request: Request) -> dict:
+    client = request.app.state.daemon
+    try:
+        data = await client.move(req.name, speed=req.speed)
         return {"ok": True, "data": data}
     except DaemonError as exc:
         raise HTTPException(status_code=_http_status_for(exc.code), detail=exc.to_dict())

@@ -90,6 +90,7 @@
         state.holding = null;
       } catch (e) { toast(`释放失败: ${e.message}`, 'err'); }
     }
+    try { await api('/api/stop', { method: 'POST' }); } catch (e) { /* swallow */ }
     try { await api('/api/light/off', { method: 'POST' }); toast('已停所有动作', 'ok'); }
     catch (e) { /* swallow */ }
   }
@@ -106,71 +107,55 @@
 
   /**
    * Press-and-hold for the four movement D-pad buttons.
-   * - pointerdown  → fire the action + start a 100 ms interval
-   * - pointerup / pointercancel / pointerleave → clear interval, send /api/stop
-   * setPointerCapture keeps pointerup reliable even if the user drags off the
-   * button before releasing.
+   * - pointerdown → trigger continuous move worker via /api/move
+   * - pointerup / pointercancel / pointerleave → trigger /api/stop
    */
   function bindHoldableMove(buttons) {
     for (const btn of buttons) {
       const name = btn.dataset.action;
-      let timer = null;
-      let isLongPress = false;
+      let isMoving = false;
 
-      const fire = async () => {
-        if (state.inflight.has(name)) return;        // skip overlapping calls
-        if (state.voice) { return; }                  // voice mode disables movement
-        state.inflight.add(name);
-        try {
-          await api('/api/action', {
-            method: 'POST',
-            body: JSON.stringify({ name, speed: 70, hold: false }),
-          });
-        } catch (e) {
-          if (e.code === 'VOICE_MODE_ACTIVE') {
-            if (timer) { clearInterval(timer); timer = null; }
-            btn.classList.remove('pressing');
-            toast('语音模式已开启, 硬件动作暂停', 'err');
-          } else {
-            toast(`动作失败: ${e.message}`, 'err');
-          }
-        } finally {
-          state.inflight.delete(name);
-        }
-      };
-
-      const onDown = (e) => {
+      const startMove = async (e) => {
         e.preventDefault();
-        if (timer) return;                             // already holding
+        if (isMoving) return;
+        if (state.voice) { toast('语音模式已开启, 硬件动作暂停', 'err'); return; }
+
         if (e.pointerId !== undefined && btn.setPointerCapture) {
           try { btn.setPointerCapture(e.pointerId); } catch {}
         }
         btn.classList.add('pressing');
-        isLongPress = false;
-        fire();                                          // immediate first call
-        timer = setInterval(() => {
-          isLongPress = true;
-          fire();
-        }, 800);                                        // 800 ms per gait cycle
-      };
+        isMoving = true;
 
-      const onUp = async (e) => {
-        e.preventDefault();
-        if (timer) { clearInterval(timer); timer = null; }
-        btn.classList.remove('pressing');
-        // Only send stop if it was a long press hold; single click allows action to finish naturally
-        if (isLongPress) {
-          try { await api('/api/stop', { method: 'POST' }); }
-          catch { /* swallow — best effort */ }
+        try {
+          await api('/api/move', {
+            method: 'POST',
+            body: JSON.stringify({ name, speed: 98 }),
+          });
+        } catch (err) {
+          btn.classList.remove('pressing');
+          isMoving = false;
+          if (err.code === 'VOICE_MODE_ACTIVE') {
+            toast('语音模式已开启, 硬件动作暂停', 'err');
+          } else {
+            toast(`移动失败: ${err.message}`, 'err');
+          }
         }
       };
 
-      btn.addEventListener('pointerdown',   onDown);
-      btn.addEventListener('pointerup',     onUp);
-      btn.addEventListener('pointercancel', onUp);
-      // pointerleave is a safety net if pointer capture isn't supported
-      // (older browsers / weird input devices).
-      btn.addEventListener('pointerleave',  onUp);
+      const stopMove = async (e) => {
+        e.preventDefault();
+        btn.classList.remove('pressing');
+        if (!isMoving) return;
+        isMoving = false;
+        try {
+          await api('/api/stop', { method: 'POST' });
+        } catch { /* swallow — best effort */ }
+      };
+
+      btn.addEventListener('pointerdown',   startMove);
+      btn.addEventListener('pointerup',     stopMove);
+      btn.addEventListener('pointercancel', stopMove);
+      btn.addEventListener('pointerleave',  stopMove);
     }
   }
 
@@ -206,9 +191,9 @@
     if (st) st.textContent = `${state.head.yaw.toFixed(0)}/${state.head.pitch.toFixed(0)}`;
   }
 
-  // --- Action buttons (squares + circles + dpad movement) ---------------
+  // --- Action buttons (squares + circles) ------------------------------
   function bindActionButtons() {
-    for (const btn of $$('[data-action]')) {
+    for (const btn of $$('#grid-squares [data-action], #grid-circles [data-action]')) {
       const name = btn.dataset.action;
       const hold = btn.dataset.hold === '1';
       btn.addEventListener('click', () => onAction(name, hold));

@@ -62,6 +62,10 @@ ALL_ACTIONS = {**ACTION_MAP, **COMPOUND_ACTIONS}
 # These three are 'hold' postures.  Clicking another hold auto-releases the previous.
 HOLD_ACTIONS = {"stand", "sit", "lie"}
 
+# Continuous movement actions (press-and-hold D-pad). These use the daemon's
+# `cmd=move` worker instead of one-shot `cmd=action`.
+MOVE_ACTIONS = ("forward", "backward", "turn-left", "turn-right")
+
 # Display groups for the front-end grid layout.
 ACTION_GROUPS = {
     "posture":  ("stand", "sit", "lie", "body-twisting"),
@@ -196,6 +200,11 @@ class DaemonClient:
             {"cmd": "action", "name": name, "speed": speed, "hold": hold},
             long=hold,
         )
+
+    async def move(self, name: str, *, speed: int = 98) -> dict:
+        if name not in MOVE_ACTIONS:
+            raise DaemonError("UNKNOWN_MOVE_ACTION", f"move action '{name}' is not in the whitelist")
+        return await self.request({"cmd": "move", "name": name, "speed": int(speed)})
 
     async def light(
         self,

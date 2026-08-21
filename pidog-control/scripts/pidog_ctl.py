@@ -64,6 +64,11 @@ COMPOUND_ACTIONS = {
     "body-twisting":  "body_twisting",
 }
 
+# Continuous movement actions for press-and-hold control (web D-pad).
+# The daemon runs a worker thread that keeps queueing one walk cycle at a
+# time until cmd=stop - mirrors examples/11_keyboard_control.py.
+MOVE_ACTIONS = {"forward", "backward", "turn-left", "turn-right"}
+
 DEFAULT_BARK_SOUND = "single_bark_1"
 
 LIGHT_MODE_MAP = {
@@ -216,6 +221,67 @@ def json_ready(obj):
     return obj
 
 
+def play_sound_blocking(path, volume=100, music=None):
+    """Play a sound file and return True on success.
+
+    robot-hat's `Music` (pygame) needs an audio session that a background
+    daemon (no root, no TTY) does not always have - pygame then fails inside
+    its playback thread and the request still succeeds silently. So prefer
+    external players: aplay for WAV, mpg123 / mplayer / ffplay for MP3, with
+    pygame as the last resort. Failures are printed to the daemon log.
+    """
+    path = str(path)
+    if not os.path.isfile(path):
+        print(f"[sound] file not found: {path}", flush=True)
+        return False
+    vol = max(0, min(100, int(volume)))
+    ext = os.path.splitext(path)[1].lower()
+
+    cmd = None
+    if ext == ".wav" and shutil.which("aplay"):
+        cmd = ["aplay", "-q", path]
+    elif ext == ".mp3" and shutil.which("mpg123"):
+        # -f scales the output amplitude; 32768 is mpg123's default (100%).
+        cmd = ["mpg123", "-q", "-f", str(int(32768 * vol / 100)), path]
+    if cmd is None:
+        for player, args in (
+            ("mplayer", ["-really-quiet", "-volume", str(vol), path]),
+            ("ffplay",  ["-nodisp", "-autoexit", "-loglevel", "quiet", "-volume", str(vol), path]),
+            ("cvlc",    ["--play-and-exit", "--quiet", path]),
+        ):
+            if shutil.which(player):
+                cmd = [player, *args]
+                break
+    if cmd is not None:
+        try:
+            proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as exc:
+            print(f"[sound] failed to run {cmd[0]}: {exc}", flush=True)
+        else:
+            if proc.returncode == 0:
+                return True
+            print(f"[sound] player exited with {proc.returncode}: {' '.join(cmd)}", flush=True)
+
+    # Last resort: robot-hat Music. music_play() goes through
+    # pygame.mixer.music, which (unlike mixer.Sound) also handles MP3.
+    if music is not None:
+        try:
+            music.music_play(path, volume=vol)
+            return True
+        except Exception as exc:
+            print(f"[sound] pygame fallback failed for {path}: {exc}", flush=True)
+    return False
+
+
+def play_sound_threading(path, volume=100, music=None):
+    """Non-blocking wrapper around play_sound_blocking()."""
+    t = threading.Thread(
+        target=play_sound_blocking, args=(path, volume, music),
+        daemon=True, name="Sound Play")
+    t.start()
+    return t
+
+
 def print_expected_dirs():
     for p in EXPECTED_DIRS:
         print(f"path:{p}={'yes' if p.exists() else 'no'}")
@@ -314,9 +380,17 @@ class PiDogController:
         self.voice_pid = None
         self.should_stop = False
         self.server = None
-        self.lock = threading.Lock()
+        # RLock: action() runs under this lock and (via _stop_move) re-enters
+        # it to flush the legs buffer.
+        self.lock = threading.RLock()
+        # press-and-hold continuous movement worker
+        self.move_lock = threading.Lock()
+        self.move_thread = None
+        self.move_name = None
+        self.move_stop_flag = False
 
     def close(self):
+        self._stop_move()
         self.runtime.close()
         if self.server is not None:
             try:
@@ -334,8 +408,15 @@ class PiDogController:
 
     def action(self, name, speed=60, hold=False):
         dog = self._connect()
+        # Stop any continuous movement first so gait cycles queued by the
+        # movement worker do not mix with the requested action.
+        if self._stop_move():
+            try:
+                dog.legs_stop()
+            except Exception:
+                pass
 
-        # Helper to resolve absolute sound file paths so speak() never fails
+        # Helper to resolve absolute sound file paths so playback never fails
         def resolve_sound(sound_name):
             candidates = [
                 Path.home() / "pidog" / "sounds" / f"{sound_name}.mp3",
@@ -350,14 +431,16 @@ class PiDogController:
 
         if name == "bark":
             sound_target = resolve_sound(DEFAULT_BARK_SOUND)
-            result = dog.speak(sound_target)
-            if result is False:
+            if not os.path.isfile(sound_target):
                 raise RuntimeError(f"PiDog sound '{DEFAULT_BARK_SOUND}' was not found in the installed sounds directory")
+            play_sound_threading(sound_target, music=getattr(dog, "music", None))
             self.last_action = {"name": name, "speed": speed, "hold": hold, "sound": DEFAULT_BARK_SOUND}
-            return {"message": f"action 'bark' ok via speak('{DEFAULT_BARK_SOUND}')"}
+            return {"message": f"action 'bark' ok via play_sound('{DEFAULT_BARK_SOUND}')"}
 
         # Compound actions: call the function from pidog.preset_actions
-        # with the runtime dog instance. Monkey patch speak if needed to resolve absolute paths.
+        # with the runtime dog instance. Monkey patch speak so preset
+        # functions find their sound files and use the daemon-safe player
+        # chain (external players first, pygame as fallback).
         if name in COMPOUND_ACTIONS:
             try:
                 import pidog.preset_actions as _pa
@@ -367,10 +450,11 @@ class PiDogController:
             if func is None:
                 raise RuntimeError(f"compound action '{name}' -> {COMPOUND_ACTIONS[name]} not found in pidog.preset_actions")
 
-            # Patch speak temporarily to ensure sound files are found
             orig_speak = dog.speak
+            music = getattr(dog, "music", None)
             def patched_speak(sound_name, volume=100):
-                return orig_speak(resolve_sound(sound_name), volume)
+                play_sound_threading(resolve_sound(sound_name), volume=volume, music=music)
+                return True
             dog.speak = patched_speak
             try:
                 func(dog)
@@ -396,6 +480,61 @@ class PiDogController:
             "posture": self.current_posture,
             "dispatched": True,
         }
+
+    # --- continuous movement (press-and-hold, cf. examples/11_keyboard_control.py) ---
+
+    def move_start(self, name, speed=98):
+        """Start continuous walking in the given direction.
+
+        Mirrors examples/11_keyboard_control.py: a worker thread keeps queueing
+        one walk cycle at a time - but only once the legs finished the previous
+        cycle - so the gait never stutters. Holding the button walks; sending
+        cmd=stop halts the dog almost immediately.
+        """
+        if name not in MOVE_ACTIONS:
+            raise RuntimeError(f"unknown move action '{name}' (expected one of {sorted(MOVE_ACTIONS)})")
+        self._stop_move()
+        dog = self._connect()
+        with self.lock:
+            self.move_stop_flag = False
+            self.move_name = name
+            self.move_thread = threading.Thread(
+                target=self._move_loop, args=(ACTION_MAP[name], int(speed)),
+                daemon=True, name=f"move-{name}")
+            self.move_thread.start()
+        self.current_posture = None
+        self.last_action = {"name": name, "mapped": ACTION_MAP[name], "speed": int(speed), "hold": False, "continuous": True}
+        return {
+            "message": f"continuous move '{name}' started at speed {speed}; send cmd=stop to halt",
+            "name": name,
+            "speed": int(speed),
+            "dispatched": True,
+        }
+
+    def _move_loop(self, action_name, speed):
+        try:
+            while not self.move_stop_flag:
+                dog = self._connect()
+                with self.lock:
+                    if self.move_stop_flag:
+                        break
+                    if dog.is_legs_done():
+                        dog.do_action(action_name, speed=speed)
+                time.sleep(0.05)
+        except Exception as exc:
+            print(f"[move] '{action_name}' worker error: {exc}", flush=True)
+
+    def _stop_move(self, join_timeout=0.5):
+        """Stop the movement worker. Returns True if one was running."""
+        with self.move_lock:
+            self.move_stop_flag = True
+            thread = self.move_thread
+            was_active = thread is not None
+            if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+                thread.join(timeout=join_timeout)
+            self.move_thread = None
+            self.move_name = None
+        return was_active
 
     def light(self, mode, color, bps=None, brightness=None):
         dog = self._connect()
@@ -426,18 +565,19 @@ class PiDogController:
     def stop(self, scope="legs"):
         """Halt ongoing movement.
 
-        Used by the web UI's "press-and-hold" D-pad: while the user holds a
-        movement button, the client repeatedly fires the corresponding action;
-        when they release, the client calls this to halt the legs immediately
-        rather than waiting for the last action's natural completion.
+        Stops the continuous-movement worker first (press-and-hold D-pad),
+        then clears the servo action buffers so the dog halts immediately
+        instead of finishing every queued gait cycle.
         """
-        dog = self._connect()
-        if scope == "body":
-            dog.body_stop()
-            msg = "body stopped (legs + head + tail)"
-        else:
-            dog.legs_stop()
-            msg = "legs stopped"
+        self._stop_move()
+        with self.lock:
+            dog = self._connect()
+            if scope == "body":
+                dog.body_stop()
+                msg = "body stopped (legs + head + tail)"
+            else:
+                dog.legs_stop()
+                msg = "legs stopped"
         return {"message": msg, "scope": scope}
 
     def head(self, yaw=None, roll=None, pitch=None, speed=50):
@@ -502,6 +642,8 @@ class PiDogController:
                 "message":    f"voice mode already {'on' if self.voice_mode else 'off'}",
             }
         if on:
+            # The voice companion subprocess takes over the hardware.
+            self._stop_move()
             script = os.environ.get(
                 "PIDOG_VOICE_SCRIPT",
                 str(Path.home() / "pidog" / "examples" / "21_embodied_pet_companion.py"),
@@ -563,6 +705,7 @@ class PiDogController:
             "import_error": None if self.runtime.available else str(self.runtime.import_error),
             "connected": self.runtime.instance is not None,
             "current_posture": self.current_posture,
+            "moving": self.move_name,
             "last_action": self.last_action,
             "last_light": self.last_light,
             "last_head": self.last_head,
@@ -584,6 +727,16 @@ class PiDogController:
         self.request_count += 1
         if cmd == "ping":
             return self.status()
+
+        # Movement control runs a worker thread that takes the hardware lock
+        # for every gait step, so it must not be dispatched while holding it
+        # (we would block on join() for up to the join timeout).
+        if cmd == "move":
+            if self.voice_mode:
+                raise RuntimeError("VOICE_MODE_ACTIVE: actions are paused while voice mode is on")
+            return self.move_start(req.get("name"), speed=req.get("speed", 98))
+        if cmd == "stop":
+            return self.stop(scope=req.get("scope", "legs"))
 
         # Non-ping commands acquire hardware lock to prevent thread/servo conflict
         with self.lock:
@@ -614,8 +767,6 @@ class PiDogController:
                 )
             if cmd == "voice":
                 return self.voice_set(bool(req.get("on", False)))
-            if cmd == "stop":
-                return self.stop(scope=req.get("scope", "legs"))
             if cmd == "shutdown":
                 return self.shutdown()
             raise RuntimeError(f"unknown controller command: {cmd}")
