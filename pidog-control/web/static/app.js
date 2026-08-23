@@ -215,6 +215,12 @@
         body: JSON.stringify({ name, speed: 70, hold: !!hold }),
       });
       log(`action ${name}${hold?'(hold)':''} ok`, 'ok');
+      // Surface sound playback failures (missing player, SDL/PulseAudio
+      // backend issues in the headless daemon) instead of swallowing them.
+      if (data && data.sound && data.sound.ok === false) {
+        const detail = data.sound.detail || data.sound.player || 'unknown';
+        toast(`声音播放失败 (${detail})`, 'warn');
+      }
       if (hold) { state.holding = name; markHolding(name); }
       else { setTimeout(() => { state.inflight.delete(name); if (btn) btn.disabled = false; }, 600); return; }
     } catch (e) {

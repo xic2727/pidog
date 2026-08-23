@@ -222,27 +222,31 @@ def json_ready(obj):
 
 
 def play_sound_blocking(path, volume=100, music=None):
-    """Play a sound file and return True on success.
+    """Play a sound file and return a structured status.
 
-    robot-hat's `Music` (pygame) needs an audio session that a background
-    daemon (no root, no TTY) does not always have - pygame then fails inside
-    its playback thread and the request still succeeds silently. So prefer
-    external players: aplay for WAV, mpg123 / mplayer / ffplay for MP3, with
-    pygame as the last resort. Failures are printed to the daemon log.
+    Returns: dict {"ok": bool, "player": str | None, "detail": str}
+
+    Player chain:
+        .wav -> aplay (ALSA)
+        .mp3 -> mpg123 (preferred), then ffplay / mplayer / cvlc fallback
+    SDL-based players (ffplay) get `SDL_AUDIODRIVER=alsa` so they work in
+    the headless daemon context (no DBUS / PulseAudio session).
+    Last resort: robot-hat Music (pygame), which often fails in headless.
     """
     path = str(path)
     if not os.path.isfile(path):
-        print(f"[sound] file not found: {path}", flush=True)
-        return False
+        msg = f"file not found: {path}"
+        print(f"[sound] {msg}", flush=True)
+        return {"ok": False, "player": None, "detail": msg}
     vol = max(0, min(100, int(volume)))
     ext = os.path.splitext(path)[1].lower()
 
     cmd = None
     if ext == ".wav" and shutil.which("aplay"):
-        cmd = ["aplay", "-q", path]
+        cmd = ("aplay", ["-q", path])
     elif ext == ".mp3" and shutil.which("mpg123"):
         # -f scales the output amplitude; 32768 is mpg123's default (100%).
-        cmd = ["mpg123", "-q", "-f", str(int(32768 * vol / 100)), path]
+        cmd = ("mpg123", ["-q", "-f", str(int(32768 * vol / 100)), path])
     if cmd is None:
         for player, args in (
             ("mplayer", ["-really-quiet", "-volume", str(vol), path]),
@@ -250,27 +254,49 @@ def play_sound_blocking(path, volume=100, music=None):
             ("cvlc",    ["--play-and-exit", "--quiet", path]),
         ):
             if shutil.which(player):
-                cmd = [player, *args]
+                cmd = (player, args)
                 break
+
+    # SDL-based players (ffplay) default to PulseAudio. In a nohup'd daemon
+    # there's no DBUS session, so audio silently drops. Force ALSA.
+    def _build_env(player):
+        env = os.environ.copy()
+        if player in {"ffplay", "mplayer"}:
+            env.setdefault("SDL_AUDIODRIVER", "alsa")
+        return env
+
     if cmd is not None:
+        player_name, player_args = cmd
+        full_cmd = [player_name, *player_args]
         try:
-            proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            proc = subprocess.run(
+                full_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                env=_build_env(player_name),
+            )
         except OSError as exc:
-            print(f"[sound] failed to run {cmd[0]}: {exc}", flush=True)
-        else:
-            if proc.returncode == 0:
-                return True
-            print(f"[sound] player exited with {proc.returncode}: {' '.join(cmd)}", flush=True)
+            msg = f"failed to run {player_name}: {exc}"
+            print(f"[sound] {msg}", flush=True)
+            return {"ok": False, "player": player_name, "detail": msg}
+        if proc.returncode == 0:
+            return {"ok": True, "player": player_name, "detail": ""}
+        err = proc.stderr.decode(errors="replace").strip()[:300]
+        msg = f"{player_name} exit={proc.returncode}: {err}" if err else f"{player_name} exit={proc.returncode}"
+        print(f"[sound] {msg}", flush=True)
+        return {"ok": False, "player": player_name, "detail": msg}
 
     # Last resort: robot-hat Music. music_play() goes through
     # pygame.mixer.music, which (unlike mixer.Sound) also handles MP3.
     if music is not None:
         try:
             music.music_play(path, volume=vol)
-            return True
+            return {"ok": True, "player": "pygame", "detail": ""}
         except Exception as exc:
-            print(f"[sound] pygame fallback failed for {path}: {exc}", flush=True)
-    return False
+            msg = f"pygame fallback failed: {exc}"
+            print(f"[sound] {msg}", flush=True)
+            return {"ok": False, "player": "pygame", "detail": msg}
+    return {"ok": False, "player": None, "detail": "no audio player available"}
 
 
 def play_sound_threading(path, volume=100, music=None):
@@ -416,6 +442,11 @@ class PiDogController:
             except Exception:
                 pass
 
+        # Result of the most recent sound playback attempt. Surfaced to the
+        # web client so silent failures (missing player, SDL/PulseAudio in a
+        # headless daemon) are visible instead of being swallowed.
+        self.last_sound_result = None
+
         # Helper to resolve absolute sound file paths so playback never fails
         def resolve_sound(sound_name):
             candidates = [
@@ -433,14 +464,19 @@ class PiDogController:
             sound_target = resolve_sound(DEFAULT_BARK_SOUND)
             if not os.path.isfile(sound_target):
                 raise RuntimeError(f"PiDog sound '{DEFAULT_BARK_SOUND}' was not found in the installed sounds directory")
-            play_sound_threading(sound_target, music=getattr(dog, "music", None))
+            sound_result = play_sound_blocking(sound_target, music=getattr(dog, "music", None))
+            self.last_sound_result = sound_result
             self.last_action = {"name": name, "speed": speed, "hold": hold, "sound": DEFAULT_BARK_SOUND}
-            return {"message": f"action 'bark' ok via play_sound('{DEFAULT_BARK_SOUND}')"}
+            return {
+                "message": f"action 'bark' via play_sound('{DEFAULT_BARK_SOUND}')",
+                "sound": sound_result,
+            }
 
         # Compound actions: call the function from pidog.preset_actions
         # with the runtime dog instance. Monkey patch speak so preset
         # functions find their sound files and use the daemon-safe player
-        # chain (external players first, pygame as fallback).
+        # chain (external players first, pygame as fallback). Playback is
+        # synchronous so the response can include a real sound status.
         if name in COMPOUND_ACTIONS:
             try:
                 import pidog.preset_actions as _pa
@@ -452,14 +488,17 @@ class PiDogController:
 
             orig_speak = dog.speak
             music = getattr(dog, "music", None)
+            last_result = {"value": None}
             def patched_speak(sound_name, volume=100):
-                play_sound_threading(resolve_sound(sound_name), volume=volume, music=music)
-                return True
+                result = play_sound_blocking(resolve_sound(sound_name), volume=volume, music=music)
+                last_result["value"] = result
+                return result["ok"]
             dog.speak = patched_speak
             try:
                 func(dog)
             finally:
                 dog.speak = orig_speak
+            self.last_sound_result = last_result["value"]
 
             self.current_posture = name if hold and name in {"stand", "sit", "lie"} else None
             self.last_action = {"name": name, "kind": "compound", "mapped": COMPOUND_ACTIONS[name], "speed": speed, "hold": hold}
@@ -468,6 +507,7 @@ class PiDogController:
                 "hold": hold,
                 "posture": self.current_posture,
                 "dispatched": True,
+                "sound": last_result["value"],
             }
 
         action_name = ACTION_MAP[name]
