@@ -299,15 +299,88 @@
   }
 
   // --- Video ------------------------------------------------------------
+  // vilib publishes MJPEG at /mjpg on port 9000 by default. The URL template
+  // is configurable via /api/camera/info — fetch it once and fall back to
+  // the documented default if the endpoint is unreachable.
+  const DEFAULT_MJPEG_URL = 'http://{host}:9000/mjpg';
+  let mjpegTemplate = DEFAULT_MJPEG_URL;  // shared between bind + reconnect
+
+  async function resolveMjpegTemplate() {
+    try {
+      const info = await api('/api/camera/info');
+      const tpl = info && info.mjpeg_url_template;
+      if (typeof tpl === 'string' && tpl.includes('{host}')) return tpl;
+    } catch { /* fall through */ }
+    return DEFAULT_MJPEG_URL;
+  }
+
   function bindVideoFallback() {
     const img = $('#mjpeg');
     const section = $('#video-section');
-    const host = window.location.hostname;
-    const tryLoad = () => { img.src = `http://${host}:9000/mjpg?t=${Date.now()}`; };
-    tryLoad();
-    img.addEventListener('load',  () => { state.videoOk = true;  section.classList.remove('no-stream'); });
-    img.addEventListener('error', () => { state.videoOk = false; section.classList.add('no-stream');    });
+    const fallback = $('#video-fallback');
+
+    const buildUrl = () => mjpegTemplate
+      .replace('{host}', window.location.hostname)
+      .replace(/[?&]t=\d+/, '') + `?t=${Date.now()}`;
+
+    const tryLoad = () => { img.src = buildUrl(); };
+
+    img.addEventListener('load',  () => {
+      state.videoOk = true;
+      section.classList.remove('no-stream');
+      hideVideoRetry();
+    });
+    img.addEventListener('error', () => {
+      state.videoOk = false;
+      section.classList.add('no-stream');
+      showVideoRetry();
+    });
+
+    // Pull the configured URL template, then attempt the stream.
+    resolveMjpegTemplate().then((tpl) => {
+      mjpegTemplate = tpl;
+      tryLoad();
+    });
+
+    // Auto-retry every 5s while the stream is broken.
     setInterval(() => { if (!state.videoOk) tryLoad(); }, 5000);
+
+    // Tap-to-retry on the fallback overlay (covers the case where vilib
+    // was offline at boot and the user wants to retry without waiting 5s).
+    if (fallback) {
+      fallback.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        tryLoad();
+      });
+      fallback.style.cursor = 'pointer';
+    }
+  }
+
+  function showVideoRetry() {
+    const fb = $('#video-fallback');
+    if (!fb) return;
+    if (!fb.querySelector('.fallback-retry')) {
+      const hint = document.createElement('small');
+      hint.className = 'fallback-retry';
+      hint.textContent = '点击此处立即重试';
+      fb.appendChild(hint);
+    }
+  }
+  function hideVideoRetry() {
+    const fb = $('#video-fallback');
+    if (!fb) return;
+    const hint = fb.querySelector('.fallback-retry');
+    if (hint) hint.remove();
+  }
+
+  // When the daemon reconnects, the upstream service may also have bounced
+  // vilib — proactively refresh the video URL to recover from silent stream
+  // freezes (where `<img>.error` doesn't fire but frames go stale).
+  function refreshVideoOnReconnect() {
+    const img = $('#mjpeg');
+    if (!img) return;
+    const tpl = mjpegTemplate.replace('{host}', window.location.hostname);
+    img.src = tpl + (tpl.includes('?') ? '&' : '?') + `t=${Date.now()}`;
   }
 
   // --- WebSocket status -------------------------------------------------
@@ -333,6 +406,8 @@
     state.online = b;
     $('#conn-dot').className  = 'dot ' + (b ? 'dot-on' : 'dot-off');
     $('#conn-text').textContent = b ? '在线' : '离线';
+    // Recover from a possibly-frozen video stream after the daemon comes back.
+    if (b) refreshVideoOnReconnect();
   }
   function applyStatus(s) {
     if (typeof s.uptime_s === 'number')     state.uptime = s.uptime_s;
