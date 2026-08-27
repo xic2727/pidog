@@ -448,6 +448,138 @@ button, .sq, .rd, .dpad-btn {
 .toast.err  { border-color: var(--danger); color: #ff6699; }
 .toast.ok   { border-color: var(--ok); color: var(--ok); }
 
+/* === Responsive: Landscape Phone Optimisation ======================= */
+/* Targets Android phones held in landscape (typical height 320-414px).
+ * Keeps the cyberpunk 3-column layout but rebalances proportions,
+ * compacts top/bottom bars, and enlarges tap targets so fingers don't
+ * mis-fire on cramped controls.
+ */
+@media (max-height: 500px) {
+  :root {
+    /* Slightly larger unit than base width-driven scale, so tap targets stay legible */
+    --u:       clamp(5px, 0.55vw + 0.4rem, 9px);
+    --u-tight: calc(var(--u) * 0.55);
+    --u-wide:  calc(var(--u) * 1.5);
+  }
+
+  /* Compact top/bottom bars — recover ~12px vertical each */
+  .topbar    { height: calc(var(--u) * 3.6 + var(--safe-top));    padding-block: calc(var(--u-tight) * 0.4); }
+  .bottombar { height: calc(var(--u) * 3.6 + var(--safe-bottom)); padding-block: calc(var(--u-tight) * 0.4); padding-top: calc(var(--u-tight) * 0.4); }
+
+  /* Hide URL label text (keep icon) to free width on the top bar */
+  #btn-url span { display: none; }
+  #btn-url { padding: calc(var(--u) * 0.4) calc(var(--u) * 0.6); }
+
+  /* Reposition main grid between the shorter bars */
+  #app {
+    top:    calc(var(--u) * 3.6 + var(--safe-top));
+    bottom: calc(var(--u) * 3.6 + var(--safe-bottom));
+    padding: calc(var(--u-tight) * 0.5) var(--u-tight);
+    gap: calc(var(--u-tight) * 0.7);
+    /* Rebalance: shrink dominant center, give sides real breathing room.
+     * 1.3:1.6:1.3 keeps FPV readable while widening controls. */
+    grid-template-columns: minmax(120px, 1.3fr) minmax(0, 1.6fr) minmax(120px, 1.3fr);
+  }
+
+  /* Panel headers: tighter, smaller tags */
+  .panel-header { margin-bottom: calc(var(--u) * 0.12); }
+  .panel-tag    { font-size: calc(var(--u) * 0.6); padding: 0 3px; }
+  .panel-title  { font-size: calc(var(--u) * 0.72); }
+
+  /* D-pad: drop the strict aspect-ratio cap so the grid grows with width,
+   * and constrain by the available container height instead. */
+  .dpad {
+    aspect-ratio: 1 / 1;
+    max-height: none;
+    /* Use container query: dpad <= min(column width, column height minus chrome) */
+    width: min(100%, calc(100cqh - var(--u) * 4));
+    align-self: center;
+    gap: calc(var(--u) * 0.4);
+  }
+  .dpad-btn {
+    font-size: calc(var(--u) * 1.4);
+    /* Enforce a minimum finger-friendly tap target (~36-40px) */
+    min-width: 36px;
+    min-height: 36px;
+  }
+
+  /* Square action buttons (3×3 grid): bigger icon, slightly larger text */
+  .sq {
+    font-size: calc(var(--u) * 0.95);
+    gap: 2px;
+    padding: 3px 2px;
+  }
+  .sq .icon { font-size: calc(var(--u) * 1.35); }
+
+  /* Round posture buttons: slightly larger label */
+  .rd        { font-size: calc(var(--u) * 1.05); }
+
+  /* HUD chips: smaller so they don't dominate a small video frame */
+  .hud-chip { font-size: calc(var(--u) * 0.7); padding: 1px calc(var(--u) * 0.4); }
+
+  /* Bottom bar copy */
+  .muted        { font-size: calc(var(--u) * 0.72); }
+  .switch-label { font-size: calc(var(--u) * 0.78); }
+  .pill         { font-size: calc(var(--u) * 0.7); padding: calc(var(--u) * 0.2) calc(var(--u) * 0.6); }
+
+  /* Brand text: keep ".OS" accent, drop redundant "PIDOG" weight */
+  .brand { font-size: calc(var(--u) * 1.1); letter-spacing: 0.06em; }
+
+  /* Brand span can be hidden on the very tightest screens — keep just the logo */
+  .brand .title { display: none; }
+}
+
+/* === Ultra-tight: very short landscape phones (<380px height) ========== */
+/* Catches older / compact devices where the regular landscape tuning still cramps. */
+@media (max-height: 380px) {
+  .topbar    { height: calc(var(--u) * 3 + var(--safe-top));    padding-block: calc(var(--u-tight) * 0.3); }
+  .bottombar { height: calc(var(--u) * 3 + var(--safe-bottom)); padding-block: calc(var(--u-tight) * 0.3); padding-top: calc(var(--u-tight) * 0.3); }
+
+  #app {
+    top:    calc(var(--u) * 3 + var(--safe-top));
+    bottom: calc(var(--u) * 3 + var(--safe-bottom));
+    /* Even more conservative: sides close to center width, video still readable */
+    grid-template-columns: minmax(110px, 1.1fr) minmax(0, 1fr) minmax(110px, 1.1fr);
+    gap: calc(var(--u-tight) * 0.5);
+  }
+
+  /* Shrink HUD label, keep only the value chip */
+  .hud-chip .hud-label { display: none; }
+
+  /* Force min tap target via flex centering rather than grid stretch */
+  .dpad-btn { min-width: 32px; min-height: 32px; }
+
+  /* Compact d-pad coords line */
+  .dpad-coord { font-size: calc(var(--u) * 0.65); }
+
+  /* Tighter brand */
+  .conn-text { display: none; }
+  .conn-badge { padding: calc(var(--u) * 0.2) calc(var(--u) * 0.5); }
+
+  /* Bottombar: shrink voice switch track so the label fits */
+  .switch-label { font-size: calc(var(--u) * 0.7); }
+}
+
+/* === Portrait fallback ================================================ */
+/* Landscape controller is the primary use-case, but portrait shouldn't
+ * be a broken single-column scroll. Show a friendly nudge instead. */
+@media (orientation: portrait) and (max-width: 600px) {
+  #app::before {
+    content: "📱 请将设备旋转至横屏使用控制台";
+    position: fixed;
+    inset: 50% 0 auto 0;
+    transform: translateY(-50%);
+    text-align: center;
+    color: var(--fg-dim);
+    font-size: calc(var(--u) * 1.1);
+    padding: var(--u);
+    pointer-events: none;
+    z-index: 40;
+  }
+  /* Hide the FPV column but keep the page from being entirely blank */
+  .col-center { display: none; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
