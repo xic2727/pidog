@@ -175,14 +175,18 @@
   }
 
   function bindHeadHome() {
-    $('#btn-head-home').addEventListener('click', async () => {
+    const onHome = async () => {
       try {
         const data = await api('/api/head/home', { method: 'POST' });
         state.head.yaw = data.yaw; state.head.roll = data.roll; state.head.pitch = data.pitch;
         updateHeadCoord();
         toast('头部回中', 'ok');
       } catch (e) { toast(`回中失败: ${e.message}`, 'err'); }
-    });
+    };
+    const btnCenter = $('#btn-head-home');
+    if (btnCenter) btnCenter.addEventListener('click', onHome);
+    const btnTop = $('#btn-head-home-top');
+    if (btnTop) btnTop.addEventListener('click', onHome);
   }
   function updateHeadCoord() {
     const el = $('#head-coord');

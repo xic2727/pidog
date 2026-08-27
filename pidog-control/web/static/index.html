@@ -46,7 +46,7 @@
         <div class="panel-header">
           <span class="panel-tag">CAM</span>
           <span class="panel-title">云台视角</span>
-          <button id="btn-head-home" class="btn-mini-icon" type="button" title="云台归中">
+          <button id="btn-head-home-top" class="btn-mini-icon" type="button" title="云台归中">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
           </button>
         </div>
@@ -59,9 +59,9 @@
           <button class="dpad-btn" data-nudge="yaw" data-delta="-15" title="左转头">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
           </button>
-          <div class="dpad-cell dpad-center">
-            <span class="crosshair"></span>
-          </div>
+          <button class="dpad-btn dpad-center btn-head-home" id="btn-head-home" title="点击头部归中 / 摆正">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+          </button>
           <button class="dpad-btn" data-nudge="yaw" data-delta="15" title="右转头">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
           </button>
@@ -134,15 +134,15 @@
           <span class="panel-title">互动表达</span>
         </div>
         <div class="square-grid" id="grid-squares">
-          <button class="sq" data-action="wag-tail"  title="摇尾巴"><span class="icon">🐕</span>摇尾</button>
-          <button class="sq" data-action="bark"      title="叫声"><span class="icon">🔊</span>吠叫</button>
-          <button class="sq" data-action="pant"      title="喘气"><span class="icon">😮‍💨</span>喘气</button>
-          <button class="sq" data-action="stretch"   title="伸懒腰"><span class="icon">🙆</span>伸懒腰</button>
-          <button class="sq" data-action="hand-shake" title="握手"><span class="icon">🤝</span>握手</button>
-          <button class="sq" data-action="high-five"  title="击掌"><span class="icon">✋</span>击掌</button>
-          <button class="sq" data-action="push-up"    title="俯卧撑"><span class="icon">💪</span>俯卧撑</button>
-          <button class="sq" data-action="scratch"    title="挠痒痒"><span class="icon">🐾</span>挠痒</button>
-          <button class="sq" data-action="howling"    title="嚎叫"><span class="icon">🐺</span>嚎叫</button>
+          <button class="sq" data-action="wag-tail"  title="摇尾巴">摇尾</button>
+          <button class="sq" data-action="bark"      title="叫声">吠叫</button>
+          <button class="sq" data-action="pant"      title="喘气">喘气</button>
+          <button class="sq" data-action="stretch"   title="伸懒腰">伸懒腰</button>
+          <button class="sq" data-action="hand-shake" title="握手">握手</button>
+          <button class="sq" data-action="high-five"  title="击掌">击掌</button>
+          <button class="sq" data-action="push-up"    title="俯卧撑">俯卧撑</button>
+          <button class="sq" data-action="scratch"    title="挠痒痒">挠痒</button>
+          <button class="sq" data-action="howling"    title="嚎叫">嚎叫</button>
         </div>
       </div>
       <div class="right-block">
@@ -151,10 +151,10 @@
           <span class="panel-title">基础姿态</span>
         </div>
         <div class="round-grid" id="grid-circles">
-          <button class="rd" data-action="stand"         data-hold="1" title="站立 (保持)"><span class="rd-inner">站</span></button>
-          <button class="rd" data-action="sit"           data-hold="1" title="坐下 (保持)"><span class="rd-inner">坐</span></button>
-          <button class="rd" data-action="lie"           data-hold="1" title="趴下 (保持)"><span class="rd-inner">趴</span></button>
-          <button class="rd" data-action="body-twisting" title="扭动身体"><span class="rd-inner">扭</span></button>
+          <button class="rd" data-action="stand"         data-hold="1" title="站立 (保持)"><span class="rd-inner">站立</span></button>
+          <button class="rd" data-action="sit"           data-hold="1" title="坐下 (保持)"><span class="rd-inner">坐下</span></button>
+          <button class="rd" data-action="lie"           data-hold="1" title="趴下 (保持)"><span class="rd-inner">趴下</span></button>
+          <button class="rd" data-action="body-twisting" title="扭动身体"><span class="rd-inner">扭动</span></button>
         </div>
       </div>
     </section>

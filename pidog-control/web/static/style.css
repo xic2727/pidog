@@ -144,19 +144,26 @@ button, .sq, .rd, .dpad-btn {
   padding: var(--u-tight) calc(var(--u) + var(--safe-right)) var(--u-tight) calc(var(--u) + var(--safe-left));
   display: grid;
   gap: var(--u-tight);
-  /* 1:2.8:1 Layout Ratio for Optimal Center FPV View */
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 2.8fr) minmax(0, 1.2fr);
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.1fr);
   grid-template-areas: "left center right";
 }
 
-.col-left, .col-center, .col-right {
+.col-left, .col-right {
   container-type: inline-size;
   container-name: col;
 }
 
 .col-left   { grid-area: left;   display: grid; grid-template-rows: 1fr 1fr; gap: var(--u-tight); min-height: 0; }
-.col-center { grid-area: center; display: flex; flex-direction: column; min-height: 0; }
-.col-right  { grid-area: right;  display: grid; grid-template-rows: 1.3fr 1fr; gap: var(--u-tight); min-height: 0; }
+.col-center {
+  grid-area: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+}
+.col-right  { grid-area: right;  display: grid; grid-template-rows: 1.15fr 1fr; gap: var(--u-tight); min-height: 0; }
 
 /* === Common Panel Header ================================================ */
 .panel-header {
@@ -215,6 +222,16 @@ button, .sq, .rd, .dpad-btn {
   display: flex; align-items: center; justify-content: center;
   color: var(--primary);
 }
+.btn-head-home {
+  cursor: pointer;
+  background: rgba(0, 240, 255, 0.08);
+  border: 1px solid rgba(0, 240, 255, 0.25);
+  color: var(--primary);
+}
+.btn-head-home:active, .btn-head-home.pressing {
+  background: var(--primary);
+  color: #000;
+}
 .crosshair {
   width: 6px; height: 6px; border-radius: 50%;
   border: 1.5px solid var(--primary);
@@ -260,8 +277,11 @@ button, .sq, .rd, .dpad-btn {
 /* === Center: FPV Video & Tactical HUD ==================================== */
 .video-container {
   position: relative;
-  width: 100%; height: 100%;
-  flex: 1; min-height: 0;
+  aspect-ratio: 4 / 3;
+  height: 100%;
+  width: auto;
+  max-width: 100%;
+  max-height: 100%;
   background: #000;
   border-radius: var(--radius);
   overflow: hidden;
@@ -270,7 +290,7 @@ button, .sq, .rd, .dpad-btn {
 }
 .video-container img {
   width: 100%; height: 100%;
-  object-fit: contain; display: block;
+  object-fit: cover; display: block;
 }
 
 /* HUD Overlay Layer */
@@ -342,14 +362,14 @@ button, .sq, .rd, .dpad-btn {
   background: var(--bg-btn);
   color: var(--fg);
   border-radius: var(--radius-sm);
-  font-size: calc(var(--u) * 0.82); font-weight: 500;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 2px;
+  font-size: calc(var(--u) * 1.05);
+  font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
   transition: all 80ms ease;
-  padding: 2px;
+  padding: 2px 4px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  letter-spacing: 0.05em;
 }
-.sq .icon { font-size: calc(var(--u) * 1.1); line-height: 1; }
 .sq:hover  { background: var(--bg-btn-hover); border-color: var(--line-light); }
 .sq:active { transform: scale(0.95); background: var(--primary); color: #000; }
 .sq.holding {
@@ -360,26 +380,30 @@ button, .sq, .rd, .dpad-btn {
 
 .round-grid {
   --n: 2;
-  display: grid; gap: calc(var(--u) * 0.4);
+  display: grid; gap: calc(var(--u) * 0.35);
   grid-template-columns: repeat(var(--n), 1fr);
   grid-template-rows:    repeat(var(--n), 1fr);
   min-height: 0; flex: 1;
+  width: 100%;
 }
 
 .rd {
-  width: min(calc(100cqw / var(--n)), calc(100cqh / var(--n)));
-  aspect-ratio: 1 / 1;
+  width: 100%;
+  height: 100%;
+  max-height: calc(var(--u) * 4.5);
   place-self: center;
   border: 1px solid var(--line-light);
   background: var(--bg-card-2);
   color: var(--fg);
-  border-radius: 50%;
-  font-size: calc(var(--u) * 0.9); font-weight: 600;
+  border-radius: var(--radius-sm);
+  font-size: calc(var(--u) * 1.1);
+  font-weight: 700;
+  letter-spacing: 0.08em;
   display: flex; align-items: center; justify-content: center;
   transition: all 80ms ease;
 }
-.rd:hover  { background: var(--bg-btn-hover); }
-.rd:active { transform: scale(0.93); background: var(--primary); color: #000; }
+.rd:hover  { background: var(--bg-btn-hover); border-color: var(--primary); }
+.rd:active { transform: scale(0.95); background: var(--primary); color: #000; }
 .rd.holding {
   background: var(--primary); color: #000;
   border-color: var(--primary);
