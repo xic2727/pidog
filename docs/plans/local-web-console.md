@@ -34,6 +34,7 @@
 - 与 HomeAssistant / MQTT / Telegram 集成 — 已在 A 方向外, 单独方案
 - TTS、传感器面板、声音选择、编排拖拽 — 留到 v1.1/v1.2
 - 视频录像 / 推流 / 物体检测 / 双向语音 — 用 vilib 自带能力, 不重做
+- **MJPEG 视频流** — 不复用 vilib 内置 Flask (首帧竞态会抛 `cv2.error: img is not a numpy array`),改用 `pidog-control/scripts/pidog_camera.py` (picamera2 + Flask) 直出 `multipart/x-mixed-replace`,URL 仍是 `:9000/mjpg`,SPA / `web_server.toml` 无需改动
 - 移动端原生 App — 用浏览器即可, 页面做 PWA 风格的响应式
 
 ### 1.4 用户故事 (个人演示场景, v1 范围)
@@ -67,7 +68,7 @@ flowchart LR
     Proxy["(可选) MJPEG 代理<br/>/api/camera/stream"]
     Client["Daemon Client<br/>(直接走 controller.sock)"]
     Bus["pidog-control<br/>Unix-socket daemon<br/>controller.sock"]
-    Cam["vilib<br/>MJPEG :9000/mjpg"]
+    Cam["pidog_camera.py<br/>(picamera2 + Flask)<br/>MJPEG :9000/mjpg"]
   end
 
   Phone -- "mDNS 解析 pidog.local<br/>HTTP / WS" --> Web
@@ -88,7 +89,7 @@ flowchart LR
 | 进程 | 启动方式 | 端口/套接字 | 职责 |
 |---|---|---|---|
 | `avahi-daemon` (新) | 系统服务 | 5353/UDP mDNS | 广播 `pidog.local` 主机名, 让手机/平板能用名字而不是 IP 访问 |
-| `vilib` (相机) | 系统 / 手动 | `:9000` MJPEG | 提供视频流, 由 web/daemon 二选一启动, 不重复 |
+| `pidog_camera.py` (picamera2) | `./start.sh start` (或手动) | `:9000` MJPEG | 提供视频流;不再复用 vilib 内置 Flask (首帧竞态) |
 | `pidog-control daemon` | `pidog_ctl.py start` | `~/.openclaw/pidog-control/controller.sock` | 唯一硬件入口, 串行化请求 |
 | `web_server` (新) | `uvicorn` 或 `python -m web_server` | `:8000` HTTP/WS | 业务逻辑 + 静态文件 + 状态推送 + 启动时打印 URL/IP |
 
@@ -108,7 +109,7 @@ flowchart LR
 ### 3.2 需要扩展 daemon (v1.1, 见 §11 后续工作)
 - `cmd=sensor` — 一次性读取 distance / IMU / 触碰
 - `cmd=head` — 绝对/相对头部 RPY
-- `cmd=snapshot` — 调 vilib 单帧抓图
+- `cmd=snapshot` — 调 picamera2 单帧抓图
 - `cmd=say` — TTS 文本
 - `cmd=sounds` — 列出 `sounds/` 下的 wav 名
 - `cmd=choreo` — 编排执行
@@ -484,7 +485,7 @@ daemon 端建议也加一个 `pidog-daemon.service`, 顺序:
 1. `python3 -c "import pidog"` — 通过则继续, 否则退出 + 提示装 pidog
 2. 检查 `~/.config/pidog/pidog.conf` 是否存在 — 缺则提示跑校准
 3. 检查 avahi-daemon 是否在跑 — 不在则提示 `sudo apt install avahi-daemon && sudo systemctl enable --now avahi-daemon`, 但不强制阻断 (IP 访问仍可用)
-4. 检查 vilib 是否在 `:9000` 提供 MJPEG — 不在则尝试 `Vilib.camera_start + display(web=True)`, 再失败则提示手动启动
+4. 检查 `pidog_camera.py` 是否在 `:9000` 提供 MJPEG (`curl http://127.0.0.1:9000/health`) — 不在则 `./start.sh restart`, 再失败则看 `camera.log`
 5. 检查 daemon socket — 不在则 `pidog_ctl.py start`
 6. uvicorn 启动, 监听 `:8000`
 7. 打印 `http://pidog.local:8000/` + 当前 IP (兜底, avahi 未生效时使用)
@@ -517,7 +518,7 @@ daemon 端建议也加一个 `pidog-daemon.service`, 顺序:
 | daemon 被 `kill -9` | 5s 内 UI 变红, 自动重启一次 |
 | 浏览器断网 10s | UI 显示离线, 重连后回到 Online |
 | 手机 4G (非同网) | 直接连不上, 提示用户需在同一 WiFi |
-| vilib 没启动 | 视频区显示占位, 其它功能仍可用 |
+| 摄像头服务 (`pidog_camera.py`) 没启动 | 视频区显示占位, 其它功能仍可用 |
 | 手机浏览器开 `http://pidog.local:8000/` | 解析成功, 进入页面 (前提: avahi 已起) |
 | 手机竖屏 / 横屏切换 | 视频和控件正常重排, 不破版 |
 | iOS Safari 点任何按钮 | 不触发页面缩放 |
@@ -545,7 +546,7 @@ daemon 端建议也加一个 `pidog-daemon.service`, 顺序:
 | v1.2 | SSE 传感器流, watch 模式 (被动反应), 编排 UI 拖拽, 头部 RPY 触屏手势 |
 | v2.0 | 鉴权 (token), HTTPS (Caddy 反代), 公网端口, 鉴权后再放开 mDNS 之外的服务 |
 | v2.1 | 与 companion 编排器联动, 触发对话式反馈 |
-| v2.2 | 多客户端 (WebRTC 双向音视频, 走 vilib + 浏览器麦克风) |
+| v2.2 | 多客户端 (WebRTC 双向音视频, 走 `pidog_camera.py` + 浏览器麦克风) |
 
 ---
 
@@ -554,7 +555,7 @@ daemon 端建议也加一个 `pidog-daemon.service`, 顺序:
 | # | 风险 / 决策 | 处理 |
 |---|---|---|
 | D1 | web 进程和 companion 同时跑会抢硬件 | 文档写明 "启动 web 前先 stop companion 例程" |
-| D2 | vilib 视频和 web 不在同一进程, 跨网段时直连失败 | 留 `proxy_enabled` 配置项做兜底 |
+| D2 | `pidog_camera.py` 视频和 web 不在同一进程, 跨网段时直连失败 | 留 `proxy_enabled` 配置项做兜底 |
 | D3 | FastAPI 引入新依赖, Pi Zero 2 W 内存紧 | 文档建议 Pi 3B+ 跑; Pi Zero 需要砍 `uvicorn[standard]` 到裸 `uvicorn` |
 | D4 | 没前端构建链, 单文件 HTML 写复杂状态会乱 | 用 vanilla JS + 显式 `state` 对象, 不引框架; 超过 500 行再考虑 |
 | D5 | WebSocket 心跳 vs SSE | 选 WS, 因为后续要支持反向控制消息 (v1.1+) |
@@ -572,7 +573,7 @@ daemon 端建议也加一个 `pidog-daemon.service`, 顺序:
 ### 13.1 已按你最新要求确定下来的
 - ✅ 连接方式: **WiFi 局域网**, 树莓派自己起 mDNS (`pidog.local`), 手动输 URL 连 (无二维码)
 - ✅ 平台: **手机/平板/电脑三端响应式**, 移动端竖屏是一等设计目标
-- ✅ 摄像头: **MJPEG 直连** vilib 9000 端口, 内嵌在页面
+- ✅ 摄像头: **MJPEG 直连** :9000 端口 (`pidog_camera.py` 自建,基于 picamera2), 内嵌在页面
 - ✅ 控制: **12 个精选动作按钮** (姿态 hold + 表情 + 移动), 一屏可见
 - ✅ **灯光/亮度控件保留** (模式 off/breath/listen/boom + 颜色调色板 + 亮度滑块)
 - ✅ 不引入前端构建链, PWA 风格 (可加桌面图标)

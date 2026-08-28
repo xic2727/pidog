@@ -57,7 +57,7 @@ journalctl --user -u pidog-web -f
 
 | 步骤 | 期望 |
 |---|---|
-| 打开 `http://<pi_ip>:8000/` | 看到页面、视频区有画面 (前提: vilib 启动) |
+| 打开 `http://<pi_ip>:8000/` | 看到页面、视频区有画面 (前提: `start.sh` 启动了摄像头) |
 | 顶栏点 "停所有" | 灯条熄灭 |
 | 点 Sit → 看狗 | 狗坐下, 按钮变高亮 (hold) |
 | 切到 Stand | 旧 hold 自动释放 |
@@ -70,12 +70,34 @@ journalctl --user -u pidog-web -f
 | 现象 | 原因 / 处理 |
 |---|---|
 | 浏览器连不上 (ERR_CONNECTION_REFUSED) | 8000 端口没起, 看启动日志; 防火墙是否放行 |
-| 视频区 "视频不可用" | vilib 没启动; 跑 `Vilib.camera_start(); Vilib.display(local=False, web=True)` |
+| 视频区 "视频不可用" | 摄像头服务没跑。`./start.sh start` 会自动起 `pidog_camera.py`; 也可手动 `python3 pidog-control/scripts/pidog_camera.py` |
+| 视频区一直转圈且 `camera.log` 刷 `img is not a numpy array` | 老 vilib 行为,已替换为 picamera2 自建服务;升级到当前代码后重启 `./start.sh restart` |
+| 摄像头服务退出 (exit code 3) | 看 `camera.log`:通常是 picamera2/libcamera 报错 (排线 / `/dev/video*` 被占用 / 已有 vilib 进程在跑) |
 | 按钮点了无反应 | daemon 没跑, 跑 `pidog_ctl.py start`; 或 daemon 死锁, 跑 `pidog_ctl.py restart` |
 | 动作返回 503 DAEMON_DOWN | 同上 |
 | 手机 4G 打开 `pidog.local` 失败 | 手机必须和 PiDog 在同一 WiFi; 4G 不行 |
 | iOS Safari 滑块很难拖 | 已知: iOS 对 `<input type=range>` 不友好, v1.1 改触屏手势 |
 | `pidog.local` 解析失败 (Linux 客户机) | 客户机需要装 `avahi-daemon`/`nss-mdns`, 桌面机通常自带 |
+
+## 摄像头服务 (替代 vilib web 流)
+
+`./start.sh` 现在后台启动 `pidog-control/scripts/pidog_camera.py`,使用
+`picamera2` 直接抓帧并以 `multipart/x-mixed-replace` 暴露在 `:9000/mjpg`,
+URL 与旧 `Vilib.display(web=True)` 完全一致,SPA 与 `web_server.toml`
+无需改动。这样规避了 vilib 内部在首帧未就绪时抛 `cv2.imencode(img=None)`
+导致每次请求都刷 `camera.log` 的问题。
+
+可调环境变量 (在 `start.sh` 里 export 或 systemd unit 里 `Environment=`):
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `PIDOG_CAMERA_PORT` | `9000` | MJPEG 监听端口 |
+| `PIDOG_CAMERA_BIND` | `0.0.0.0` | 绑定地址 |
+| `PIDOG_CAMERA_SIZE` | `640x480` | 分辨率 |
+| `PIDOG_CAMERA_FPS` | `15` | 帧率 |
+| `PIDOG_CAMERA_QUALITY` | `75` | JPEG 质量 1-100 |
+| `PIDOG_CAMERA_VFLIP` | `false` | 垂直翻转 |
+| `PIDOG_CAMERA_HFLIP` | `false` | 水平翻转 |
 
 ## 目录结构
 

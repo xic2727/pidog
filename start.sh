@@ -4,7 +4,13 @@
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PIDOG_CTL="$SCRIPT_DIR/pidog-control/scripts/pidog_ctl.py"
+PIDOG_CAMERA="$SCRIPT_DIR/pidog-control/scripts/pidog_camera.py"
 WEB_SERVER="$SCRIPT_DIR/pidog-control/web/web_server.py"
+
+# Camera process pattern used by pgrep for status / graceful stop.
+# Matches both the script launch and the inline vilib snippet (for upgrade
+# scenarios where the old subprocess is still alive during restart).
+CAMERA_PGREP_PATTERN="pidog_camera.py|vilib.camera_start"
 
 LOG_DIR="$HOME/.openclaw/pidog-control"
 mkdir -p "$LOG_DIR"
@@ -25,39 +31,16 @@ start_services() {
     sleep 2
 
     # 2. 后台启动摄像头推流服务
+    #    自定义 picamera2 进程替代原 vilib.display(web=True),避免 vilib 内部
+    #    Flask 在首帧未就绪时抛出 cv2.imencode(img=None) 反复刷屏 camera.log。
+    #    URL 与旧实现保持一致:http://<host>:9000/mjpg,SPA / web_server.toml 无需改动。
     echo "[2/3] 后台启动摄像头推流服务 (port 9000)..."
-    pkill -f "vilib.camera_start" 2>/dev/null || true
+    pkill -f "$CAMERA_PGREP_PATTERN" 2>/dev/null || true
 
-    nohup python3 -c "
-import time, signal, sys
-from vilib import Vilib
-
-running = True
-def signal_handler(signum, frame):
-    global running
-    print(f'Received signal {signum}, closing camera gracefully...', flush=True)
-    running = False
-
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)
-
-try:
-    Vilib.camera_start(vflip=False, hflip=False)
-    Vilib.display(local=False, web=True)
-    while running:
-        time.sleep(0.5)
-except Exception as e:
-    print('Camera error:', e, flush=True)
-finally:
-    print('Executing Vilib.camera_close()...', flush=True)
-    try:
-        Vilib.camera_close()
-    except Exception as e:
-        print('Camera close error:', e, flush=True)
-    print('Camera closed cleanly.', flush=True)
-" > "$CAMERA_LOG" 2>&1 &
-    echo $! > "$CAMERA_PID_FILE"
-    echo "      摄像头服务已启动 [PID $!], 日志: $CAMERA_LOG"
+    nohup python3 "$PIDOG_CAMERA" > "$CAMERA_LOG" 2>&1 &
+    CAM_PID=$!
+    echo "$CAM_PID" > "$CAMERA_PID_FILE"
+    echo "      摄像头服务已启动 [PID $CAM_PID], 日志: $CAMERA_LOG"
     sleep 2
 
     # 3. 后台启动 Web 控制台
@@ -92,7 +75,7 @@ stop_services() {
     fi
     pkill -f "web_server.py" 2>/dev/null || true
 
-    # 2. 停止摄像头服务 (优先 SIGTERM/SIGINT 让 picamera2/vilib 触发 signal_handler 并调用 camera_close)
+    # 2. 停止摄像头服务 (优先 SIGTERM/SIGINT 让 picamera2 触发 signal_handler 并调用 camera.close)
     echo "[2/3] 停止摄像头推流服务..."
     CAM_PID=""
     if [ -f "$CAMERA_PID_FILE" ]; then
@@ -104,25 +87,25 @@ stop_services() {
     if [ -n "$CAM_PID" ] && kill -0 "$CAM_PID" 2>/dev/null; then
         kill -SIGTERM "$CAM_PID" 2>/dev/null || true
     fi
-    pkill -SIGTERM -f "vilib.camera_start" 2>/dev/null || true
+    pkill -SIGTERM -f "$CAMERA_PGREP_PATTERN" 2>/dev/null || true
 
     # 循环等待最多 3 秒让摄像头关闭并释放 /dev/video* 句柄与 9000 端口
     WAIT_SEC=0
-    while pgrep -f "vilib.camera_start" >/dev/null 2>&1 && [ $WAIT_SEC -lt 30 ]; do
+    while pgrep -f "$CAMERA_PGREP_PATTERN" >/dev/null 2>&1 && [ $WAIT_SEC -lt 30 ]; do
         sleep 0.1
         WAIT_SEC=$((WAIT_SEC + 1))
     done
 
     # 若 3 秒后进程仍未退出，尝试 SIGINT 再次提醒
-    if pgrep -f "vilib.camera_start" >/dev/null 2>&1; then
-        pkill -SIGINT -f "vilib.camera_start" 2>/dev/null || true
+    if pgrep -f "$CAMERA_PGREP_PATTERN" >/dev/null 2>&1; then
+        pkill -SIGINT -f "$CAMERA_PGREP_PATTERN" 2>/dev/null || true
         sleep 1
     fi
 
     # 最终兜底：若仍残留则强制清理，确保不会影响下次启动
-    if pgrep -f "vilib.camera_start" >/dev/null 2>&1; then
+    if pgrep -f "$CAMERA_PGREP_PATTERN" >/dev/null 2>&1; then
         echo "      摄像头进程超时未响应，强制清理..."
-        pkill -9 -f "vilib.camera_start" 2>/dev/null || true
+        pkill -9 -f "$CAMERA_PGREP_PATTERN" 2>/dev/null || true
     else
         echo "      摄像头服务已优雅关闭，设备句柄已释放"
     fi
@@ -143,7 +126,7 @@ status_services() {
     python3 "$PIDOG_CTL" status
 
     echo -n "Camera Stream (port 9000): "
-    if pgrep -f "vilib.camera_start" > /dev/null; then
+    if pgrep -f "$CAMERA_PGREP_PATTERN" > /dev/null; then
         echo "running"
     else
         echo "stopped"
