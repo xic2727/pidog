@@ -278,9 +278,6 @@
       toast(`播放失败: ${e.message}`, 'err');
     }
   }
-    const btn = document.querySelector('button.holding');
-    if (btn) btn.classList.remove('holding');
-  }
 
   // --- Voice switch -----------------------------------------------------
   function bindVoiceSwitch() {
@@ -322,9 +319,12 @@
   }
 
   // --- Video ------------------------------------------------------------
-  // vilib publishes MJPEG at /mjpg on port 9000 by default. The URL template
-  // is configurable via /api/camera/info — fetch it once and fall back to
-  // the documented default if the endpoint is unreachable.
+  // The server can either:
+  //   (a) Same-origin proxy: `/api/camera/stream` (preferred — sidesteps
+  //       cross-port <img> quirks and mDNS resolution failures on phones), or
+  //   (b) Direct URL with `{host}` placeholder (legacy, replaced client-side
+  //       with window.location.hostname).
+  // We accept both shapes and build the final URL accordingly.
   const DEFAULT_MJPEG_URL = 'http://{host}:9000/mjpg';
   let mjpegTemplate = DEFAULT_MJPEG_URL;  // shared between bind + reconnect
 
@@ -332,9 +332,26 @@
     try {
       const info = await api('/api/camera/info');
       const tpl = info && info.mjpeg_url_template;
-      if (typeof tpl === 'string' && tpl.includes('{host}')) return tpl;
+      if (typeof tpl === 'string' && tpl.length > 0) return tpl;
     } catch { /* fall through */ }
     return DEFAULT_MJPEG_URL;
+  }
+
+  function buildMjpegUrl(template, cacheBust = true) {
+    // Same-origin proxy: starts with '/' → resolve against current origin
+    // and skip host substitution (would otherwise corrupt the path).
+    if (template.startsWith('/')) {
+      const base = template.replace(/[?&]t=\d+/, '');
+      return base + (cacheBust
+        ? (base.includes('?') ? '&' : '?') + `t=${Date.now()}`
+        : '');
+    }
+    // Direct URL with {host} placeholder.
+    const tpl = template.replace('{host}', window.location.hostname)
+                        .replace(/[?&]t=\d+/, '');
+    return tpl + (cacheBust
+      ? (tpl.includes('?') ? '&' : '?') + `t=${Date.now()}`
+      : '');
   }
 
   function bindVideoFallback() {
@@ -342,11 +359,7 @@
     const section = $('#video-section');
     const fallback = $('#video-fallback');
 
-    const buildUrl = () => mjpegTemplate
-      .replace('{host}', window.location.hostname)
-      .replace(/[?&]t=\d+/, '') + `?t=${Date.now()}`;
-
-    const tryLoad = () => { img.src = buildUrl(); };
+    const tryLoad = () => { img.src = buildMjpegUrl(mjpegTemplate); };
 
     img.addEventListener('load',  () => {
       state.videoOk = true;

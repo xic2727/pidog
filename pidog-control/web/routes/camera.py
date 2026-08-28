@@ -72,7 +72,13 @@ async def stream(request: Request) -> StreamingResponse:
     upstream_port = parsed.port or 80
     upstream_path = (parsed.path or "/") + ("?%s" % parsed.query if parsed.query else "")
 
+    # Default content type; we'll override it with whatever the upstream says
+    # (the boundary parameter must match the actual `boundary=...` used in the
+    # body or browsers can't demultiplex the multipart stream).
+    content_type = "multipart/x-mixed-replace; boundary=frame"
+
     async def relay() -> "asyncio.AsyncIterator[bytes]":
+        nonlocal content_type
         try:
             reader, writer = await asyncio.open_connection(upstream_host, upstream_port)
         except (ConnectionRefusedError, OSError) as exc:
@@ -103,8 +109,20 @@ async def stream(request: Request) -> StreamingResponse:
                     return
                 head += chunk
 
-            # Anything past \r\n\r\n is body — forward it.
-            _, _, body_prefix = head.partition(b"\r\n\r\n")
+            # Forward the upstream's status line + headers — but rewrite the
+            # Content-Type so the browser sees a real value even if the upstream
+            # sent something else (e.g. image/jpeg for a single-frame response).
+            header_text, _, body_prefix = head.partition(b"\r\n\r\n")
+            for line in header_text.split(b"\r\n"):
+                lower = line.lower()
+                if lower.startswith(b"content-type:"):
+                    ct = line.split(b":", 1)[1].strip().decode("latin-1", "replace")
+                    # Only adopt upstream CT if it looks like multipart
+                    # (some upstreams send `image/jpeg` for the first frame).
+                    if "multipart" in ct.lower():
+                        content_type = ct
+                    break
+
             if body_prefix:
                 yield body_prefix
 
@@ -135,5 +153,5 @@ async def stream(request: Request) -> StreamingResponse:
 
     return StreamingResponse(
         relay(),
-        media_type="multipart/x-mixed-replace; boundary=frame",
+        media_type=content_type,
     )

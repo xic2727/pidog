@@ -149,7 +149,11 @@ button, .sq, .rd, .dpad-btn {
 }
 
 .col-left, .col-right {
-  container-type: inline-size;
+  /* `size` (not `inline-size`) enables both `cqi` AND `cqh` queries.
+   * With `inline-size` the landscape d-pad rule `width: min(100%, calc(100cqh - ...))`
+   * evaluates to a negative value, collapsing the d-pad to 0 width and
+   * making all head/move buttons invisible / unclickable. */
+  container-type: size;
   container-name: col;
 }
 
@@ -364,8 +368,9 @@ button, .sq, .rd, .dpad-btn {
 .square-grid {
   --n: 3;
   display: grid; gap: calc(var(--u) * 0.35);
-  grid-template-columns: repeat(var(--n), 1fr);
-  grid-template-rows:    repeat(var(--n), 1fr);
+  grid-template-columns: repeat(var(--n), minmax(0, 1fr));
+  grid-auto-rows: 1fr;            /* 11 items flow into 4 rows; size them evenly */
+  grid-template-rows: repeat(var(--n), 1fr);
   min-height: 0; flex: 1;
 }
 
