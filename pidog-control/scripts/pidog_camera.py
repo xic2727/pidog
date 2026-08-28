@@ -275,9 +275,13 @@ def mjpg() -> Response:
         # will show the "video unavailable" overlay and retry.
         log.info("Stream request rejected: camera not ready (%s)", camera.open_error)
         abort(503, description="camera not ready")
+    # direct_passthrough=True stops Werkzeug from buffering the multipart
+    # stream. Without it, some browsers fire `<img>.onerror` because the
+    # boundary marker arrives in a later chunk than expected.
     return Response(
         _mjpeg_stream(),
         mimetype="multipart/x-mixed-replace; boundary=frame",
+        direct_passthrough=True,
     )
 
 
