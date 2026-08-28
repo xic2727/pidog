@@ -65,6 +65,7 @@
     bindTopbar();
     bindDpad();
     bindActionButtons();
+    bindSoundButtons();
     bindHeadHome();
     bindVoiceSwitch();
     bindVideoFallback();
@@ -255,6 +256,28 @@
     if (btn) btn.classList.add('holding');
   }
   function clearHoldingMark() {
+    const btn = document.querySelector('button.holding');
+    if (btn) btn.classList.remove('holding');
+  }
+
+  // --- Sound buttons (birthday song / greeting) ----------------------------
+  function bindSoundButtons() {
+    for (const btn of $$('[data-sound]')) {
+      btn.addEventListener('click', () => onSound(btn.dataset.sound));
+    }
+  }
+
+  async function onSound(name) {
+    try {
+      await api('/api/sound', {
+        method: 'POST',
+        body: JSON.stringify({ sound: name }),
+      });
+      toast('播放成功', 'ok');
+    } catch (e) {
+      toast(`播放失败: ${e.message}`, 'err');
+    }
+  }
     const btn = document.querySelector('button.holding');
     if (btn) btn.classList.remove('holding');
   }

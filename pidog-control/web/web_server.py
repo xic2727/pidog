@@ -40,7 +40,7 @@ from fastapi.staticfiles import StaticFiles
 from web.config import AppConfig
 from web.daemon_client import DaemonClient
 from web.mdns_register import format_banner, probe
-from web.routes import actions, camera, heads, lights, status, voice
+from web.routes import actions, camera, heads, lights, sounds, status, voice
 from web.status_poller import StatusBroadcaster
 
 logger = logging.getLogger("pidog.web")
@@ -107,6 +107,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(camera.router)
     app.include_router(heads.router)
     app.include_router(voice.router)
+    app.include_router(sounds.router)
 
     # WebSocket
     @app.websocket("/ws/status")
