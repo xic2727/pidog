@@ -1097,6 +1097,29 @@ def cmd_start(args):
     print_json_or_text(start_controller_process(force_restart=args.force))
 
 
+def cmd_ping(args):
+    """Round-trip `cmd=ping` to the daemon; exit 0 iff it answers.
+
+    Designed for shell-side liveness checks (start.sh, systemd, monitoring):
+      * exit 0 on success (stdout: JSON with daemon status)
+      * exit 1 on no socket (daemon not started)
+      * exit 2 on socket present but no response
+      * exit 3 on unexpected exception
+    """
+    if not SOCKET_PATH.exists():
+        print(f"socket not found: {SOCKET_PATH}", file=sys.stderr)
+        sys.exit(1)
+    try:
+        data = controller_request({"cmd": "ping"}, timeout=args.timeout)
+    except (ConnectionRefusedError, FileNotFoundError) as exc:
+        print(f"connect failed: {exc}", file=sys.stderr)
+        sys.exit(2)
+    except Exception as exc:
+        print(f"ping failed: {exc}", file=sys.stderr)
+        sys.exit(3)
+    print_json_or_text(data)
+
+
 def cmd_stop(args):
     print_json_or_text(stop_controller_process())
 
@@ -1138,6 +1161,10 @@ def main():
     p = sub.add_parser("start", help="Start the persistent PiDog controller")
     p.add_argument("--force", action="store_true", help="Restart the controller if already running")
     p.set_defaults(func=cmd_start)
+
+    p = sub.add_parser("ping", help="Round-trip ping the controller (exit 0 iff it answers)")
+    p.add_argument("--timeout", type=float, default=2.0, help="socket timeout (s)")
+    p.set_defaults(func=cmd_ping)
 
     p = sub.add_parser("stop", help="Stop the persistent PiDog controller")
     p.set_defaults(func=cmd_stop)
