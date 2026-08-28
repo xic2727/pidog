@@ -7,10 +7,13 @@ PIDOG_CTL="$SCRIPT_DIR/pidog-control/scripts/pidog_ctl.py"
 PIDOG_CAMERA="$SCRIPT_DIR/pidog-control/scripts/pidog_camera.py"
 WEB_SERVER="$SCRIPT_DIR/pidog-control/web/web_server.py"
 
-# Camera process pattern used by pgrep for status / graceful stop.
-# Matches both the script launch and the inline vilib snippet (for upgrade
-# scenarios where the old subprocess is still alive during restart).
-CAMERA_PGREP_PATTERN="pidog_camera.py|vilib.camera_start"
+# Camera process patterns used by pgrep for status / graceful stop.
+# - pidog_camera.py  : our new picamera2 server
+# - vilib.*          : any leftover from the previous vilib-based design
+# - libcamera-*      : libcamera helper processes that may hold the sensor
+# - rpicam-*         : Raspberry Pi camera CLI tools (rpicam-hello etc.)
+# - 'python3.*camera': stray python processes that import picamera2/vilib
+CAMERA_PGREP_PATTERN="pidog_camera.py|vilib|libcamera|rpicam|python3.*camera"
 
 LOG_DIR="$HOME/.openclaw/pidog-control"
 mkdir -p "$LOG_DIR"

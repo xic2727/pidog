@@ -125,6 +125,13 @@ CONFIG = {
     "size":    _parse_size(os.environ.get("PIDOG_CAMERA_SIZE")),
     "fps":     _env_int("PIDOG_CAMERA_FPS", 15, lo=1, hi=60),
     "quality": _env_int("PIDOG_CAMERA_QUALITY", 75, lo=10, hi=95),
+    # Retry camera init briefly — libcamera's pipeline handler is sometimes
+    # still being released by a process we just killed (or by another
+    # concurrent `start.sh` invocation). Without this, a benign 2-3s race
+    # window kills the service and the SPA shows "video unavailable" until
+    # the user manually restarts.
+    "init_retries":     _env_int("PIDOG_CAMERA_INIT_RETRIES", 5, lo=1, hi=20),
+    "init_retry_delay": _env_int("PIDOG_CAMERA_INIT_RETRY_DELAY", 2, lo=1, hi=30),
 }
 
 
@@ -157,31 +164,43 @@ class Camera:
         self._open()
 
     def _open(self) -> None:
-        try:
-            cam = Picamera2()
-            main = {"size": self._cfg["size"], "format": "BGR888"}
-            ctrl = {"FrameRate": self._cfg["fps"]}
-            video_config = cam.create_video_configuration(main=main, controls=ctrl)
-            cam.configure(video_config)
+        attempts = self._cfg["init_retries"]
+        delay = self._cfg["init_retry_delay"]
+        last_err: Optional[str] = None
+        for i in range(1, attempts + 1):
+            try:
+                cam = Picamera2()
+                main = {"size": self._cfg["size"], "format": "BGR888"}
+                ctrl = {"FrameRate": self._cfg["fps"]}
+                video_config = cam.create_video_configuration(main=main, controls=ctrl)
+                cam.configure(video_config)
 
-            # libcamera honours these on most sensors
-            cam.set_controls({
-                "AeEnable": True,
-                "AwbEnable": True,
-            })
+                # libcamera honours these on most sensors
+                cam.set_controls({
+                    "AeEnable": True,
+                    "AwbEnable": True,
+                })
 
-            cam.start()
-            self._cam = cam
-            self._ready.set()
-            log.info(
-                "Camera opened: size=%s fps=%d vflip=%s hflip=%s",
-                self._cfg["size"], self._cfg["fps"],
-                self._cfg["vflip"], self._cfg["hflip"],
-            )
-        except Exception as exc:  # noqa: BLE001 — surface any libcamera error
-            self._open_error = f"{type(exc).__name__}: {exc}"
-            self._ready.clear()
-            log.error("Camera open failed: %s", self._open_error)
+                cam.start()
+                self._cam = cam
+                self._ready.set()
+                log.info(
+                    "Camera opened: size=%s fps=%d vflip=%s hflip=%s",
+                    self._cfg["size"], self._cfg["fps"],
+                    self._cfg["vflip"], self._cfg["hflip"],
+                )
+                return
+            except Exception as exc:  # noqa: BLE001 — surface any libcamera error
+                last_err = f"{type(exc).__name__}: {exc}"
+                log.warning(
+                    "Camera open attempt %d/%d failed: %s",
+                    i, attempts, last_err,
+                )
+                if i < attempts:
+                    time.sleep(delay)
+        self._open_error = last_err or "unknown error"
+        self._ready.clear()
+        log.error("Camera open failed after %d attempts: %s", attempts, self._open_error)
 
     # Called by the per-request generators
     def capture_jpeg(self) -> Optional[bytes]:

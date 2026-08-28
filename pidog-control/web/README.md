@@ -98,6 +98,8 @@ URL 与旧 `Vilib.display(web=True)` 完全一致,SPA 与 `web_server.toml`
 | `PIDOG_CAMERA_QUALITY` | `75` | JPEG 质量 1-100 |
 | `PIDOG_CAMERA_VFLIP` | `false` | 垂直翻转 |
 | `PIDOG_CAMERA_HFLIP` | `false` | 水平翻转 |
+| `PIDOG_CAMERA_INIT_RETRIES` | `5` | 摄像头初始化失败时重试次数 (应对 libcamera pipeline 抢占) |
+| `PIDOG_CAMERA_INIT_RETRY_DELAY` | `2` | 每次重试间隔 (秒) |
 
 ## 目录结构
 
