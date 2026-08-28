@@ -19,10 +19,15 @@ long_timeout    = 15.0
 ws_push_interval_ms = 1000
 
 [camera]
-# The SPA uses {host} as a placeholder for window.location.hostname
+# Where the upstream picamera2 (or vilib) camera server is reachable.
+# `{host}` is substituted by the SPA (direct mode) or by the proxy itself
+# (proxy mode — gets replaced with 127.0.0.1 so we never bounce off mDNS).
 direct_mjpeg_url = "http://{host}:9000/mjpg"
-# Proxy mode (v1.1) — leave false in v1
-proxy_enabled = false
+# Same-origin MJPEG proxy. When true, the SPA loads /api/camera/stream
+# from its own origin and the FastAPI server forwards bytes from the
+# upstream camera server. Sidesteps cross-port `<img>` quirks and mDNS
+# resolution failures on phones. Set false to fall back to direct mode.
+proxy_enabled = true
 
 [mdns]
 # mDNS hostname advertised by avahi-daemon

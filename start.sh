@@ -31,7 +31,28 @@ start_services() {
     # 1. 启动硬件控制 Daemon 进程
     echo "[1/3] 启动硬件控制守护进程 (Daemon)..."
     python3 "$PIDOG_CTL" start --force
-    sleep 2
+
+    # Verify the daemon is actually responsive — without this, a failed
+    # start (e.g. hardware-permission error, stale pid file, calibration
+    # missing) silently leaves the web console's "在线" indicator red and
+    # every action returns 503 DAEMON_DOWN. Two pings spaced 1s apart cover
+    # the "process up but socket not yet bound" race.
+    DAEMON_OK=0
+    for _ in 1 2 3 4 5; do
+        if python3 "$PIDOG_CTL" ping >/dev/null 2>&1; then
+            DAEMON_OK=1
+            break
+        fi
+        sleep 1
+    done
+    if [ "$DAEMON_OK" -ne 1 ]; then
+        echo "      ❌ Daemon 启动后无法响应 ping,Web 控制台将报 DAEMON_DOWN"
+        echo "         看日志: tail -40 ~/.openclaw/pidog-control/controller.log"
+        echo "         看状态: python3 $PIDOG_CTL status"
+        # 不强制中断启动 — 摄像头 / web 仍可独立起来,用户可以排查
+    else
+        echo "      ✅ Daemon 已就绪 (ping ok)"
+    fi
 
     # 2. 后台启动摄像头推流服务
     #    自定义 picamera2 进程替代原 vilib.display(web=True),避免 vilib 内部
@@ -44,7 +65,22 @@ start_services() {
     CAM_PID=$!
     echo "$CAM_PID" > "$CAMERA_PID_FILE"
     echo "      摄像头服务已启动 [PID $CAM_PID], 日志: $CAMERA_LOG"
-    sleep 2
+
+    # 等摄像头就绪 (picamera2 启动 + 初始化重试最多 ~10s)
+    CAM_OK=0
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if curl -fsS -o /dev/null http://127.0.0.1:9000/health 2>/dev/null; then
+            CAM_OK=1
+            break
+        fi
+        sleep 1
+    done
+    if [ "$CAM_OK" -ne 1 ]; then
+        echo "      ⚠️  摄像头服务 10s 内未响应 /health,Web 视频区可能显示占位"
+        echo "         看日志: tail -40 $CAMERA_LOG"
+    else
+        echo "      ✅ 摄像头服务就绪 (http://127.0.0.1:9000/health)"
+    fi
 
     # 3. 后台启动 Web 控制台
     echo "[3/3] 后台启动 Web 控制台 (port 8000)..."
